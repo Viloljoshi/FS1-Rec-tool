@@ -1,0 +1,95 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 47.4% 11.2%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 47.4% 11.2%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 47.4% 11.2%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --ring: 215 20.2% 65.1%;
+    --radius: 0.5rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  html, body {
+    @apply bg-background text-foreground;
+    /* Inter variable features: rlig/calt standard, ss01 alt digits,
+       cv11 single-story a (matches enterprise UI expectations), zero dot for 0 vs O clarity */
+    font-feature-settings: 'rlig' 1, 'calt' 1, 'ss01' 1, 'cv11' 1, 'zero' 1;
+    font-synthesis: none;
+  }
+
+  /* Headings get a tighter leading + subtle negative tracking.
+     Tailwind's text-* scales already apply this, but set a floor here
+     so raw <h*> elements inherit enterprise rhythm even outside prose. */
+  h1, h2, h3, h4 {
+    @apply text-slate-900;
+    letter-spacing: -0.015em;
+    line-height: 1.2;
+  }
+
+  /* Financial numbers always tabular — the dashboard, KPI tiles,
+     match scores, and money cells all opt in via this class or attr. */
+  .num, .money, [data-numeric], .tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1, 'zero' 1;
+  }
+
+  /* Code-ish content: prefer the mono var, keep tabular numerics. */
+  code, pre, kbd, samp, .font-mono {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1, 'zero' 1, 'ss01' 1;
+  }
+
+  /* Focus ring — enterprise UIs want a visible but quiet focus state. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-slate-400 ring-offset-1 ring-offset-background;
+  }
+}
+
+@layer components {
+  .dense-row {
+    height: 32px;
+  }
+  .dense-cell {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+  .kbd {
+    @apply rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground;
+  }
+}
