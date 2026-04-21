@@ -14,7 +14,19 @@ import { createHash } from 'node:crypto';
 import { supabaseService } from '@/lib/supabase/service';
 import { logger } from '@/lib/logger/pino';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+/**
+ * Lazy client — avoid crashing at module load when OPENAI_API_KEY isn't
+ * available. Next.js evaluates this module during `next build` (page-data
+ * collection); a missing env var there would abort the build even though
+ * no embedding is being computed. Initialize on first use instead.
+ */
+let _openai: OpenAI | null = null;
+function getOpenAI(): OpenAI {
+  if (_openai === null) {
+    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return _openai;
+}
 
 export const EMBED_MODEL = process.env.OPENAI_EMBED_MODEL ?? 'text-embedding-3-small';
 
@@ -65,7 +77,7 @@ async function logEmbed(args: EmbedLogArgs): Promise<void> {
 export async function embed(text: string, actor: string | null = null): Promise<number[]> {
   const started = Date.now();
   try {
-    const res = await openai.embeddings.create({ model: EMBED_MODEL, input: text });
+    const res = await getOpenAI().embeddings.create({ model: EMBED_MODEL, input: text });
     const vec = res.data[0]?.embedding ?? [];
     await logEmbed({
       call_type: 'EMBED',
@@ -107,7 +119,7 @@ export async function embedBatch(
   if (texts.length === 0) return [];
   const started = Date.now();
   try {
-    const res = await openai.embeddings.create({ model: EMBED_MODEL, input: texts });
+    const res = await getOpenAI().embeddings.create({ model: EMBED_MODEL, input: texts });
     const vecs = res.data.map((d) => d.embedding);
     await logEmbed({
       call_type: 'EMBED',

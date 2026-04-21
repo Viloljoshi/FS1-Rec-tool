@@ -23,7 +23,20 @@ function extractJson(raw: string): string {
   return trimmed;
 }
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+/**
+ * Lazy client — instantiating Anthropic() reads ANTHROPIC_API_KEY and throws
+ * if missing. Next.js evaluates server modules during `next build` to collect
+ * page data, which would fail the build on environments that don't expose
+ * runtime secrets at build time (Netlify Builds scope, CI caches, etc.).
+ * Initialize on first use instead.
+ */
+let _client: Anthropic | null = null;
+function getClient(): Anthropic {
+  if (_client === null) {
+    _client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  }
+  return _client;
+}
 
 /**
  * Per-seam model routing. Reasoning-heavy seams (tiebreak, schema inference,
@@ -145,7 +158,7 @@ export async function jsonCall<S extends ZodTypeAny>(
       opts.system +
       '\n\nIMPORTANT: Respond with a single JSON object only. No prose before or after. No markdown code fences.';
 
-    const response = await client.messages.create({
+    const response = await getClient().messages.create({
       model: modelFor(opts.call_type),
       max_tokens: DEFAULT_MAX_TOKENS,
       system: [
@@ -248,7 +261,7 @@ export async function textCall(opts: TextCallOptions): Promise<string> {
   const prompt = `${opts.system}\n\n---\n${opts.user}`;
   const started = Date.now();
   try {
-    const response = await client.messages.create({
+    const response = await getClient().messages.create({
       model: modelFor(opts.call_type),
       max_tokens: opts.max_tokens ?? 2048,
       system: [{ type: 'text', text: opts.system, cache_control: { type: 'ephemeral' } }],
