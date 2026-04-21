@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { friendlyZodError } from '@/lib/api/errors';
 import { supabaseServer } from '@/lib/supabase/server';
@@ -182,7 +182,12 @@ export async function POST(request: Request) {
   }
 
   // Phase B — for Postgres misses only, hit the KG in parallel (capped).
-  //           Most ingests will have 0–5 novel names, so this stays fast.
+  // Hard 3s timeout per call — Neo4j AuraDB can hang on cold starts in
+  // serverless environments; we'd rather mark as 'none' than blow the function.
+  const KG_TIMEOUT_MS = 3000;
+  const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
+    Promise.race([p, new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))]);
+
   if (kgFallbackCandidates.length > 0) {
     const CONCURRENCY = 4;
     let idx = 0;
@@ -194,7 +199,7 @@ export async function POST(request: Request) {
           const raw = kgFallbackCandidates[my]!;
           const key = raw.toLowerCase();
           try {
-            const kg = await resolveCounterparty(raw);
+            const kg = await withTimeout(resolveCounterparty(raw), KG_TIMEOUT_MS);
             kgCache.set(
               key,
               kg?.id ? { id: kg.id, via: 'kg' } : { id: null, via: 'none' }
@@ -339,29 +344,30 @@ export async function POST(request: Request) {
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // 6b. Embed counterparty strings (deduped — 1 OpenAI call per unique CPY, not per trade)
+  // 6b. Embed counterparty strings after response — OpenAI latency shouldn't
+  // block the HTTP reply. Embeddings update trades_canonical in the background.
   const uniqueCpys = Array.from(
     new Set(canonicalInserts.map((r) => String(r.counterparty ?? '')).filter(Boolean))
   );
   if (uniqueCpys.length > 0) {
-    logger.info({ count: uniqueCpys.length }, 'feeds/process: embedding unique counterparties');
-    try {
-      const vecs = await embedBatch(uniqueCpys, user.id);
-      for (let idx = 0; idx < uniqueCpys.length; idx++) {
-        const name = uniqueCpys[idx]!;
-        const vec = vecs[idx];
-        if (!vec || vec.length === 0) continue;
-        const { error: upErr } = await service
-          .from('trades_canonical')
-          .update({ counterparty_embedding: `[${vec.join(',')}]` })
-          .eq('source_id', feedId)
-          .eq('source_version', version)
-          .eq('counterparty', name);
-        if (upErr) logger.warn({ err: upErr, name }, 'embedding update failed for CPY');
+    after(async () => {
+      try {
+        const vecs = await embedBatch(uniqueCpys, user.id);
+        for (let idx = 0; idx < uniqueCpys.length; idx++) {
+          const name = uniqueCpys[idx]!;
+          const vec = vecs[idx];
+          if (!vec || vec.length === 0) continue;
+          await service
+            .from('trades_canonical')
+            .update({ counterparty_embedding: `[${vec.join(',')}]` })
+            .eq('source_id', feedId)
+            .eq('source_version', version)
+            .eq('counterparty', name);
+        }
+      } catch (err) {
+        logger.error({ err }, 'feeds/process: background embedding failed');
       }
-    } catch (err) {
-      logger.error({ err }, 'feeds/process embedding step failed — continuing without');
-    }
+    });
   }
 
   // 7. Audit
