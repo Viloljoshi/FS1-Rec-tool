@@ -1,6 +1,6 @@
 # ReconAI
 
-**AI-native securities trade reconciliation platform — MVP.**
+**AI-native securities trade reconciliation platform — MVP for the demo purpose.
 
 Built in a 4-hour weekend sprint as a portfolio artifact for a Senior PM role
 in fintech reconciliation. Feels enterprise-grade; AI is bounded to five
