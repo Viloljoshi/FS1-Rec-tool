@@ -93,7 +93,8 @@ Role is stored in `profiles.role` and enforced by RLS policies on every table.
 - **Supabase** — Postgres, Auth, Storage, RLS, pgvector
 - **Neo4j AuraDB** (free tier) + `neo4j-driver` — reference knowledge graph
 - **Neo4j MCP** (`mcp-neo4j-cypher`) — dev-time Cypher access
-- **OpenAI** — `gpt-4o-mini` (JSON mode), `text-embedding-3-small`
+- **Anthropic Claude Sonnet 4.6** (`claude-sonnet-4-6`) — all chat/completion traffic. JSON responses parsed + Zod-validated at the boundary.
+- **OpenAI** — `text-embedding-3-small` only (counterparty embeddings; Anthropic has no embeddings API). See ADR-013.
 - **Zod** at every boundary (API, forms, AI responses)
 - **React Hook Form** + `@hookform/resolvers/zod` for every form
 - **Recharts** for dashboard; **react-sigma** + **graphology** for the entity graph

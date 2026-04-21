@@ -5,6 +5,56 @@ decisions made during the build. New entries go at the top.
 
 ---
 
+## 2026-04-21 — ADR-013 — Chat moves to Anthropic Claude Sonnet 4.6; embeddings stay on OpenAI
+
+**Context:** The build started on OpenAI `gpt-4o-mini` via `openai` SDK's
+Responses API with JSON mode (`response_format: {type: 'json_object'}`).
+Product decision to consolidate chat/completion on Anthropic Claude.
+
+**Decision:**
+
+- **Chat → Claude Sonnet 4.6** (`claude-sonnet-4-6`) via `@anthropic-ai/sdk`
+  v0.90. All 7 AI seams (tiebreak · explain-break · next-best-action ·
+  rule-drafts · infer-schema · suggest-pipeline · search · workspace-summary ·
+  dashboard-narrative) now call Claude.
+- **Embeddings stay on OpenAI** — `text-embedding-3-small`, 1536 dims.
+  Anthropic has no embeddings API; Voyage AI is the recommended partner but
+  swapping would require re-validating the Fellegi-Sunter counterparty
+  similarity scorer that was tuned on OpenAI's 1536-dim space.
+- **Module structure preserved.** `lib/ai/openai.ts` keeps its filename but
+  now re-exports `jsonCall` / `textCall` from the new `lib/ai/anthropic.ts`.
+  Every prompt file's `import { jsonCall } from '@/lib/ai/openai'` keeps
+  working — zero import churn across the 7 prompt files.
+- **Structured output via prompt + Zod, not SDK helper.** The SDK's
+  `zodOutputFormat()` requires Zod 4 shape; project is on Zod 3. Pattern:
+  system prompt ends with "Respond with a single JSON object only"; response
+  text is `JSON.parse`'d and Zod-validated. Clean, no helper dependency.
+
+**Schema change:** `ALTER TABLE ai_calls ADD cache_read_tokens,
+cache_creation_tokens, refusal` — to log Claude-specific usage fields.
+
+**Verified:** Re-ran Broker B Equities cycle. 8 MEDIUM-band tiebreaks went
+to Claude — all 8 succeeded, zero fallbacks, 7,829 input + 1,123 output
+tokens, avg 4.0s latency, `model: 'claude-sonnet-4-6'` on every
+`ai_calls` row.
+
+**Gotchas caught during migration:**
+
+- `@anthropic-ai/sdk` `0.36.3` (initial install) doesn't have `messages.parse`
+  or `helpers/zod`. Upgrade to `^0.90.0`.
+- Node's built-in `--env-file` flag (used by `tsx --env-file=.env.local`)
+  silently failed to parse `ANTHROPIC_API_KEY` when the value contained
+  multiple dashes; other vars loaded fine. Production Next.js dotenv is not
+  affected. Scripts now pre-export env vars before invoking tsx.
+- `textCall` `fallback` param made optional (`fallback?: string`) to
+  preserve the existing dashboard-narrative route that doesn't pass one.
+
+**Rollback path:** Revert this commit + `ALTER TABLE` drop columns. All 7
+prompt files are untouched by this migration, so re-pointing the wrapper
+back at OpenAI in `lib/ai/anthropic.ts` would be a 20-line change.
+
+---
+
 ## 2026-04-21 — ADR-012b — Pipeline Profiles: full end-to-end per-asset-class config
 
 Follow-up to ADR-012. The original ADR claimed "per-asset-class pipelines"
