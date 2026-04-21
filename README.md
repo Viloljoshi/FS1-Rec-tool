@@ -28,6 +28,23 @@ specific seams; every match decision is decomposable and auditable.
 - Audit every state change in an append-only, RLS-enforced log
 - Evaluate AI quality against a curated gold set; precision / recall / F1
 
+#Learned match scoring / match classification
+
+After deterministic blocking and feature similarity, add a supervised model that predicts:
+
+match / non-match probability
+based on features like:
+amount difference
+trade date gap
+settlement date gap
+security identifier similarity
+counterparty similarity
+quantity difference
+price deviation
+currency match
+venue / book similarity
+text embedding similarity for descriptions
+
 ## Stack
 
 Next.js 15 · TypeScript strict · Supabase (Postgres + Auth + RLS + pgvector) ·
