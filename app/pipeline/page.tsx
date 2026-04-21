@@ -3,6 +3,14 @@ import { PipelineClient } from './PipelineClient';
 import { supabaseServer } from '@/lib/supabase/server';
 import { getCurrentUser } from '@/lib/rbac/server';
 
+interface PipelineRow {
+  id: string;
+  name: string;
+  asset_class: string | null;
+  description: string | null;
+  active: boolean;
+}
+
 export default async function PipelinePage({
   searchParams
 }: {
@@ -18,11 +26,12 @@ export default async function PipelinePage({
     .select('id, name, asset_class, description, active')
     .eq('active', true)
     .order('name');
+  const pipelineRows = (pipelines ?? []) as PipelineRow[];
 
   const requestedPipeline =
-    (pipelines ?? []).find((p) => p.id === sp.pipeline || p.name === sp.pipeline) ??
-    (pipelines ?? []).find((p) => p.name === 'Equities') ??
-    (pipelines ?? [])[0] ??
+    pipelineRows.find((p: PipelineRow) => p.id === sp.pipeline || p.name === sp.pipeline) ??
+    pipelineRows.find((p: PipelineRow) => p.name === 'Equities') ??
+    pipelineRows[0] ??
     null;
 
   let rulesQuery = sb
@@ -64,7 +73,7 @@ export default async function PipelinePage({
           latestCycle={latestCycle ?? null}
           feeds={feeds ?? []}
           canEdit={canEdit}
-          pipelines={pipelines ?? []}
+          pipelines={pipelineRows}
           activePipelineId={requestedPipeline?.id ?? null}
         />
       </div>

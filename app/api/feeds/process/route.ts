@@ -130,6 +130,15 @@ export async function POST(request: Request) {
   // Ordered fetches so the Map-last-write-wins rule is deterministic when
   // two rows share a key (rare, but real — e.g. two aliases with same
   // normalized form mapping to different entities).
+  interface CounterpartyEntityRow {
+    id: string;
+    canonical_name: string;
+  }
+  interface CounterpartyAliasRow {
+    entity_id: string;
+    alias: string;
+    normalized_alias: string | null;
+  }
   const { data: cpEntities } = await service
     .from('counterparty_entities')
     .select('id, canonical_name')
@@ -138,9 +147,19 @@ export async function POST(request: Request) {
     .from('counterparty_aliases')
     .select('entity_id, alias, normalized_alias')
     .order('entity_id', { ascending: true });
-  const cpByName = new Map((cpEntities ?? []).map((e) => [e.canonical_name.toLowerCase(), e.id]));
-  const cpByAlias = new Map((aliases ?? []).map((a) => [a.alias.toLowerCase(), a.entity_id]));
-  const cpByNorm = new Map((aliases ?? []).map((a) => [a.normalized_alias.toLowerCase(), a.entity_id]));
+  const cpEntitiesRows = (cpEntities ?? []) as CounterpartyEntityRow[];
+  const aliasRows = (aliases ?? []) as CounterpartyAliasRow[];
+  const cpByName = new Map<string, string>(
+    cpEntitiesRows.map((e: CounterpartyEntityRow) => [e.canonical_name.toLowerCase(), e.id])
+  );
+  const cpByAlias = new Map<string, string>(
+    aliasRows.map((a: CounterpartyAliasRow) => [a.alias.toLowerCase(), a.entity_id])
+  );
+  const cpByNorm = new Map<string, string>(
+    aliasRows
+      .filter((a: CounterpartyAliasRow): a is CounterpartyAliasRow & { normalized_alias: string } => Boolean(a.normalized_alias))
+      .map((a) => [a.normalized_alias.toLowerCase(), a.entity_id])
+  );
 
   // Counterparty resolution. Postgres projection first (in-memory maps, microseconds),
   // then a single KG lookup per *novel* name only. Seeded aliases resolve

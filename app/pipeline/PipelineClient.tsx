@@ -150,7 +150,7 @@ interface Feed {
 interface PipelineOption {
   id: string;
   name: string;
-  asset_class: string;
+  asset_class: string | null;
   description: string | null;
   active: boolean;
 }
@@ -222,12 +222,12 @@ export function PipelineClient({
             >
               <span>{p.name}</span>
               <span
-                className={cn(
-                  'ml-2 font-mono text-[10px]',
-                  isActive ? 'text-slate-300' : 'text-slate-400'
-                )}
-              >
-                {p.asset_class}
+              className={cn(
+                'ml-2 font-mono text-[10px]',
+                isActive ? 'text-slate-300' : 'text-slate-400'
+              )}
+            >
+                {p.asset_class ?? '—'}
               </span>
             </button>
           );

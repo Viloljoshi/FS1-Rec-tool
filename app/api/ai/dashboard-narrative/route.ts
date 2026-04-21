@@ -9,6 +9,23 @@ interface CycleSummary {
   started_at: string;
 }
 
+interface FeedRow {
+  id: string;
+  name: string;
+}
+
+interface AICallRow {
+  call_type: string;
+  fallback_used: boolean | null;
+}
+
+interface EvalRow {
+  f1_score: number;
+  precision_score: number;
+  recall_score: number;
+  created_at: string;
+}
+
 export async function POST(): Promise<Response> {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
@@ -30,15 +47,24 @@ export async function POST(): Promise<Response> {
       .limit(1)
   ]);
 
-  const feedName = (id: string): string => feeds?.find((f) => f.id === id)?.name ?? id.slice(0, 8);
+  const feedRows = (feeds ?? []) as FeedRow[];
+  const cycleRows = (cycles ?? []) as Array<{
+    feed_b_id: string;
+    started_at: string;
+    counts: Record<string, number> | null;
+  }>;
+  const aiCallRows = (aiCalls ?? []) as AICallRow[];
+  const evalRows = (evals ?? []) as EvalRow[];
 
-  const summaries: CycleSummary[] = (cycles ?? []).map((c) => ({
+  const feedName = (id: string): string => feedRows.find((f: FeedRow) => f.id === id)?.name ?? id.slice(0, 8);
+
+  const summaries: CycleSummary[] = cycleRows.map((c) => ({
     feed_b: feedName(c.feed_b_id),
     counts: c.counts ?? {},
     started_at: c.started_at
   }));
 
-  const aiTotals = (aiCalls ?? []).reduce<Record<string, { total: number; fallback: number }>>((acc, row) => {
+  const aiTotals = aiCallRows.reduce<Record<string, { total: number; fallback: number }>>((acc, row) => {
     const k = row.call_type;
     acc[k] = acc[k] ?? { total: 0, fallback: 0 };
     acc[k].total++;
@@ -46,7 +72,7 @@ export async function POST(): Promise<Response> {
     return acc;
   }, {});
 
-  const lastEval = evals?.[0] ?? null;
+  const lastEval = evalRows[0] ?? null;
 
   const system = `You are a reconciliation operations analyst writing a brief, factual daily summary for the Head of Ops.
 Two to three sentences. Plain English. No bullet points. No jargon the Head of Ops doesn't know. Lead with what's unusual.

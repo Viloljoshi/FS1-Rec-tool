@@ -6,6 +6,21 @@ export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> }
 ): Promise<Response> {
+  interface AuditEventRow {
+    id: string;
+    created_at: string;
+    actor: string | null;
+    action: string;
+    before: unknown;
+    after: unknown;
+    reason: string | null;
+  }
+  interface ProfileRow {
+    id: string;
+    email: string | null;
+    role: string | null;
+  }
+
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
@@ -30,7 +45,8 @@ export async function GET(
   // Enrich actor with email + role. Safe lookup — if profile is missing we
   // still return the event (DB-enforced audit integrity means actors may no
   // longer exist but the event must still render).
-  const actorIds = Array.from(new Set((events ?? []).map((e) => e.actor).filter(Boolean)));
+  const typedEvents = (events ?? []) as AuditEventRow[];
+  const actorIds = Array.from(new Set(typedEvents.map((e: AuditEventRow) => e.actor).filter((actor): actor is string => Boolean(actor))));
   let actorMap = new Map<string, { email: string | null; role: string | null }>();
   if (actorIds.length > 0) {
     const { data: profs } = await supabase
@@ -38,11 +54,11 @@ export async function GET(
       .select('id, email, role')
       .in('id', actorIds as string[]);
     actorMap = new Map(
-      (profs ?? []).map((p) => [p.id as string, { email: p.email ?? null, role: p.role ?? null }])
+      ((profs ?? []) as ProfileRow[]).map((p: ProfileRow) => [p.id, { email: p.email, role: p.role }])
     );
   }
 
-  const enriched = (events ?? []).map((e) => ({
+  const enriched = typedEvents.map((e: AuditEventRow) => ({
     id: e.id,
     ts: e.created_at,
     action: e.action,
@@ -51,8 +67,8 @@ export async function GET(
     after: e.after,
     actor: {
       id: e.actor,
-      email: actorMap.get(e.actor as string)?.email ?? null,
-      role: actorMap.get(e.actor as string)?.role ?? null
+      email: e.actor ? actorMap.get(e.actor)?.email ?? null : null,
+      role: e.actor ? actorMap.get(e.actor)?.role ?? null : null
     }
   }));
 
