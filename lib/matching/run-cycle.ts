@@ -27,6 +27,11 @@ interface RunOptions {
    * table, falling back to the first pipeline found.
    */
   pipelineId?: string;
+  /**
+   * If provided, skip creating a new matching_cycles row and use this ID instead.
+   * Used by the async route pattern: row pre-created → background execution.
+   */
+  existingCycleId?: string;
 }
 
 export interface CycleResult {
@@ -175,25 +180,35 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
     }
   }
 
-  // 3. Create cycle row (PENDING -> RUNNING)
-  const { data: cycle, error: cycErr } = await supabase
-    .from('matching_cycles')
-    .insert({
-      feed_a_id: opts.feedAId,
-      feed_a_version: opts.feedAVersion,
-      feed_b_id: opts.feedBId,
-      feed_b_version: opts.feedBVersion,
-      date_from: opts.dateFrom,
-      date_to: opts.dateTo,
-      status: 'RUNNING',
-      matching_rules_id: rulesRow?.id ?? null,
-      matching_rules_version: rulesRow?.version ?? null,
-      pipeline_id: pipelineId,
-      initiated_by: opts.initiatedBy
-    })
-    .select('id')
-    .single();
-  if (cycErr) throw cycErr;
+  // 3. Create cycle row (PENDING -> RUNNING), or adopt pre-created row
+  let cycleId: string;
+  if (opts.existingCycleId) {
+    cycleId = opts.existingCycleId;
+    await supabase
+      .from('matching_cycles')
+      .update({ status: 'RUNNING', matching_rules_id: rulesRow?.id ?? null, matching_rules_version: rulesRow?.version ?? null, pipeline_id: pipelineId })
+      .eq('id', cycleId);
+  } else {
+    const { data: cycle, error: cycErr } = await supabase
+      .from('matching_cycles')
+      .insert({
+        feed_a_id: opts.feedAId,
+        feed_a_version: opts.feedAVersion,
+        feed_b_id: opts.feedBId,
+        feed_b_version: opts.feedBVersion,
+        date_from: opts.dateFrom,
+        date_to: opts.dateTo,
+        status: 'RUNNING',
+        matching_rules_id: rulesRow?.id ?? null,
+        matching_rules_version: rulesRow?.version ?? null,
+        pipeline_id: pipelineId,
+        initiated_by: opts.initiatedBy
+      })
+      .select('id')
+      .single();
+    if (cycErr) throw cycErr;
+    cycleId = cycle.id;
+  }
 
   // 4. Run engine with fully pipeline-scoped config
   const engineOut = runEngine({
@@ -246,7 +261,7 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
 
   // 5. Write match_results in batches
   const matchInserts = engineOut.matches.map((m) => ({
-    cycle_id: cycle.id,
+    cycle_id: cycleId,
     trade_a_id: m.trade_a_id,
     trade_b_id: m.trade_b_id,
     match_type: m.explanation.match_type,
@@ -370,7 +385,7 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
     const tB = tradeById.get(m.trade_b_id);
     const cls = classifyAll(m);
     const row: ExceptionPayload = {
-      cycle_id: cycle.id,
+      cycle_id: cycleId,
       match_result_id: matchIdByPair.get(`${m.trade_a_id}|${m.trade_b_id}`) ?? null,
       trade_a_id: m.trade_a_id,
       trade_b_id: m.trade_b_id,
@@ -387,7 +402,7 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
     // A trade unmatched on B but flagged as a duplicate is a replay, not a
     // missing counterpart — label it DUPLICATE so ops doesn't chase a "break".
     exceptionInserts.push({
-      cycle_id: cycle.id,
+      cycle_id: cycleId,
       match_result_id: null,
       trade_a_id: null,
       trade_b_id: idB,
@@ -411,7 +426,7 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
       ];
     } else {
       exceptionInserts.push({
-        cycle_id: cycle.id,
+        cycle_id: cycleId,
         match_result_id: null,
         trade_a_id: null,
         trade_b_id: dupId,
@@ -527,7 +542,7 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
   // 6d. Emit audit events so the Activity tab has content from the moment an
   //     exception is opened (previously only escalations wrote audit rows).
   const auditRows: Array<Record<string, unknown>> = [];
-  const cycleShort = cycle.id.slice(0, 8);
+  const cycleShort = cycleId.slice(0, 8);
   for (const ex of insertedExceptions) {
     auditRows.push({
       actor: opts.initiatedBy,
@@ -538,7 +553,7 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
       after: {
         band: ex.band,
         exception_class: ex.exception_class,
-        cycle_id: cycle.id,
+        cycle_id: cycleId,
         trade_a_id: ex.trade_a_id,
         trade_b_id: ex.trade_b_id
       },
@@ -581,10 +596,10 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
       finished_at: new Date().toISOString(),
       counts
     })
-    .eq('id', cycle.id);
+    .eq('id', cycleId);
 
   return {
-    cycle_id: cycle.id,
+    cycle_id: cycleId,
     counts: engineOut.counts,
     match_count: matchInserts.length,
     exception_count: exceptionCount,

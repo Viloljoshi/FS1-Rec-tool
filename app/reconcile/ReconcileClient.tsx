@@ -145,9 +145,7 @@ export function ReconcileClient({ existingFeeds }: { existingFeeds: ExistingFeed
                 });
                 if (!res.ok) throw new Error((await res.json()).error ?? 'run failed');
                 const data = await res.json();
-                toast.success(
-                  `Cycle complete — ${data.match_count} matches, ${data.exception_count} exceptions`
-                );
+                toast.success('Matching cycle started — opening workspace…');
                 router.push(`/workspace?cycle=${data.cycle_id}`);
               } catch (err) {
                 toast.error(String(err));

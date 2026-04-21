@@ -1,9 +1,10 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { friendlyZodError } from '@/lib/api/errors';
 import { supabaseService } from '@/lib/supabase/service';
 import { getCurrentUser } from '@/lib/rbac/server';
 import { runMatchingCycle } from '@/lib/matching/run-cycle';
+import { logger } from '@/lib/logger/pino';
 
 const BodySchema = z.object({
   feed_a_id: z.string().uuid(),
@@ -12,12 +13,10 @@ const BodySchema = z.object({
   date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   pipeline_id: z.string().uuid().optional(),
   restrict_by_counterparty_entity: z.boolean().optional(),
-  // When true, the server will skip the dedup check and force a fresh cycle.
-  // Default is false so rapid button clicks don't create duplicate cycles.
   force: z.boolean().optional()
 });
 
-const DEDUP_WINDOW_MS = 60_000; // 60s — covers a "user clicked twice by mistake"
+const DEDUP_WINDOW_MS = 60_000;
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
@@ -52,9 +51,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'feed_not_found' }, { status: 404 });
   }
 
-  // Idempotency guard: if an identical cycle ran in the last DEDUP_WINDOW_MS,
-  // surface its result instead of queuing a duplicate. Pass `force: true` to
-  // bypass (e.g. user clicks "Run again anyway").
+  // Idempotency guard
   if (!parsed.data.force) {
     const since = new Date(Date.now() - DEDUP_WINDOW_MS).toISOString();
     const { data: recent } = await service
@@ -83,21 +80,60 @@ export async function POST(request: Request) {
     }
   }
 
-  try {
-    const result = await runMatchingCycle({
-      supabase: service,
-      feedAId: feedA.id,
-      feedAVersion: feedA.version,
-      feedBId: feedB.id,
-      feedBVersion: feedB.version,
-      dateFrom: parsed.data.date_from,
-      dateTo: parsed.data.date_to,
-      initiatedBy: user.id,
-      restrictByCounterpartyEntity: parsed.data.restrict_by_counterparty_entity ?? true,
-      pipelineId: parsed.data.pipeline_id
-    });
-    return NextResponse.json(result);
-  } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+  // Pre-create the cycle row so we can return cycle_id immediately,
+  // then run the full matching pipeline (AI tiebreak + triage) in the
+  // background via after() — avoids Netlify's 10s function timeout.
+  const { data: preCycle, error: preErr } = await service
+    .from('matching_cycles')
+    .insert({
+      feed_a_id: feedA.id,
+      feed_a_version: feedA.version,
+      feed_b_id: feedB.id,
+      feed_b_version: feedB.version,
+      date_from: parsed.data.date_from,
+      date_to: parsed.data.date_to,
+      status: 'PENDING',
+      initiated_by: user.id
+    })
+    .select('id')
+    .single();
+
+  if (preErr || !preCycle) {
+    return NextResponse.json({ error: preErr?.message ?? 'failed to create cycle' }, { status: 500 });
   }
+
+  const cycleId = preCycle.id;
+  const opts = {
+    supabase: service,
+    feedAId: feedA.id,
+    feedAVersion: feedA.version,
+    feedBId: feedB.id,
+    feedBVersion: feedB.version,
+    dateFrom: parsed.data.date_from,
+    dateTo: parsed.data.date_to,
+    initiatedBy: user.id,
+    restrictByCounterpartyEntity: parsed.data.restrict_by_counterparty_entity ?? true,
+    pipelineId: parsed.data.pipeline_id,
+    existingCycleId: cycleId
+  };
+
+  // Run matching after the response is sent — keeps the HTTP call fast
+  after(async () => {
+    try {
+      await runMatchingCycle(opts);
+    } catch (err) {
+      logger.error({ err, cycleId }, 'background matching cycle failed');
+      await service
+        .from('matching_cycles')
+        .update({ status: 'FAILED', finished_at: new Date().toISOString() })
+        .eq('id', cycleId);
+    }
+  });
+
+  return NextResponse.json({
+    cycle_id: cycleId,
+    status: 'running',
+    match_count: 0,
+    exception_count: 0
+  });
 }
