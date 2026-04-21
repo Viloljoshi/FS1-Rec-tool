@@ -11,26 +11,34 @@
 
 import OpenAI from 'openai';
 import { createHash } from 'node:crypto';
+import { z, type ZodTypeAny } from 'zod';
 import { supabaseService } from '@/lib/supabase/service';
 import { logger } from '@/lib/logger/pino';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+function getClient(): OpenAI {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is missing');
+  }
+  return new OpenAI({ apiKey });
+}
 
+export const MODEL = process.env.OPENAI_MODEL ?? 'gpt-5.4';
 export const EMBED_MODEL = process.env.OPENAI_EMBED_MODEL ?? 'text-embedding-3-small';
 
-// Re-export the chat surface so prompt files don't need import changes.
-export {
-  jsonCall,
-  textCall,
-  CHAT_MODEL as MODEL,
-  type AiCallType,
-  type JsonCallOptions,
-  type TextCallOptions
-} from './anthropic';
+export type AiCallType =
+  | 'INFER_SCHEMA'
+  | 'EMBED'
+  | 'TIEBREAK'
+  | 'EXPLAIN_BREAK'
+  | 'NEXT_BEST_ACTION'
+  | 'RULE_DRAFT'
+  | 'SEARCH_PARSE'
+  | 'WORKSPACE_SUMMARY'
+  | 'DASHBOARD_NARRATIVE'
+  | 'PIPELINE_SUGGEST';
 
-import type { AiCallType } from './anthropic';
-
-interface EmbedLogArgs {
+interface LogArgs {
   call_type: AiCallType;
   model: string;
   prompt: string;
@@ -40,9 +48,10 @@ interface EmbedLogArgs {
   output: unknown;
   fallback_used: boolean;
   actor: string | null;
+  request_id?: string;
 }
 
-async function logEmbed(args: EmbedLogArgs): Promise<void> {
+async function logCall(args: LogArgs) {
   try {
     const sb = supabaseService();
     const prompt_hash = createHash('sha256').update(args.prompt).digest('hex');
@@ -55,19 +64,155 @@ async function logEmbed(args: EmbedLogArgs): Promise<void> {
       latency_ms: args.latency_ms,
       output: args.output as object,
       fallback_used: args.fallback_used,
-      actor: args.actor
+      actor: args.actor,
+      request_id: args.request_id ?? null
     });
   } catch (err) {
-    logger.error({ err }, 'failed to log embed ai_call');
+    logger.error({ err }, 'failed to log ai_call');
+  }
+}
+
+function extractJson(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return trimmed;
+  const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch?.[1]) return fenceMatch[1].trim();
+  const braceStart = trimmed.indexOf('{');
+  const braceEnd = trimmed.lastIndexOf('}');
+  if (braceStart >= 0 && braceEnd > braceStart) {
+    return trimmed.slice(braceStart, braceEnd + 1);
+  }
+  return trimmed;
+}
+
+export interface JsonCallOptions<S extends ZodTypeAny> {
+  call_type: AiCallType;
+  system: string;
+  user: string;
+  schema: S;
+  fallback: z.infer<S>;
+  actor: string | null;
+  request_id?: string;
+}
+
+/**
+ * Calls GPT-5.4 via the Responses API and validates JSON output via Zod.
+ * Falls back to `opts.fallback` on any error; every outcome is logged to ai_calls.
+ */
+export async function jsonCall<S extends ZodTypeAny>(
+  opts: JsonCallOptions<S>
+): Promise<z.infer<S>> {
+  const prompt = `${opts.system}\n\n---\n${opts.user}`;
+  const started = Date.now();
+
+  try {
+    const instructions =
+      opts.system +
+      '\n\nReturn ONLY a single JSON object — no markdown, no prose, no code fences.';
+
+    const response = await getClient().responses.create({
+      model: MODEL,
+      instructions,
+      input: opts.user
+    });
+
+    const latency_ms = Date.now() - started;
+    const raw = response.output_text ?? '';
+    const jsonStr = extractJson(raw);
+    const parsed = JSON.parse(jsonStr);
+    const validated = opts.schema.parse(parsed);
+
+    await logCall({
+      call_type: opts.call_type,
+      model: MODEL,
+      prompt,
+      input_tokens: response.usage?.input_tokens ?? null,
+      output_tokens: response.usage?.output_tokens ?? null,
+      latency_ms,
+      output: validated,
+      fallback_used: false,
+      actor: opts.actor,
+      request_id: opts.request_id
+    });
+
+    return validated;
+  } catch (err) {
+    const latency_ms = Date.now() - started;
+    logger.error({ err, call_type: opts.call_type }, 'ai jsonCall failed, using fallback');
+    await logCall({
+      call_type: opts.call_type,
+      model: MODEL,
+      prompt,
+      input_tokens: null,
+      output_tokens: null,
+      latency_ms,
+      output: { error: String(err), fallback: opts.fallback },
+      fallback_used: true,
+      actor: opts.actor,
+      request_id: opts.request_id
+    });
+    return opts.fallback;
+  }
+}
+
+/**
+ * Freeform text generation (for dashboard narratives, copilot messages).
+ * Not Zod-validated — caller is responsible.
+ */
+export async function textCall(opts: {
+  call_type: AiCallType;
+  system: string;
+  user: string;
+  actor: string | null;
+}): Promise<string> {
+  const prompt = `${opts.system}\n\n---\n${opts.user}`;
+  const started = Date.now();
+  try {
+    const response = await getClient().responses.create({
+      model: MODEL,
+      instructions: opts.system,
+      input: opts.user
+    });
+    const latency_ms = Date.now() - started;
+    const out = response.output_text ?? '';
+    await logCall({
+      call_type: opts.call_type,
+      model: MODEL,
+      prompt,
+      input_tokens: response.usage?.input_tokens ?? null,
+      output_tokens: response.usage?.output_tokens ?? null,
+      latency_ms,
+      output: { text: out },
+      fallback_used: false,
+      actor: opts.actor
+    });
+    return out;
+  } catch (err) {
+    logger.error({ err }, 'textCall failed');
+    await logCall({
+      call_type: opts.call_type,
+      model: MODEL,
+      prompt,
+      input_tokens: null,
+      output_tokens: null,
+      latency_ms: Date.now() - started,
+      output: { error: String(err) },
+      fallback_used: true,
+      actor: opts.actor
+    });
+    return '';
   }
 }
 
 export async function embed(text: string, actor: string | null = null): Promise<number[]> {
   const started = Date.now();
   try {
-    const res = await openai.embeddings.create({ model: EMBED_MODEL, input: text });
+    const res = await getClient().embeddings.create({
+      model: EMBED_MODEL,
+      input: text
+    });
     const vec = res.data[0]?.embedding ?? [];
-    await logEmbed({
+    await logCall({
       call_type: 'EMBED',
       model: EMBED_MODEL,
       prompt: text,
@@ -81,7 +226,7 @@ export async function embed(text: string, actor: string | null = null): Promise<
     return vec;
   } catch (err) {
     logger.error({ err }, 'embed failed');
-    await logEmbed({
+    await logCall({
       call_type: 'EMBED',
       model: EMBED_MODEL,
       prompt: text,
@@ -100,16 +245,16 @@ export async function embed(text: string, actor: string | null = null): Promise<
  * Batched embeddings — for seed/canonicalization time when we have many unique
  * counterparty strings to embed at once.
  */
-export async function embedBatch(
-  texts: string[],
-  actor: string | null = null
-): Promise<number[][]> {
+export async function embedBatch(texts: string[], actor: string | null = null): Promise<number[][]> {
   if (texts.length === 0) return [];
   const started = Date.now();
   try {
-    const res = await openai.embeddings.create({ model: EMBED_MODEL, input: texts });
+    const res = await getClient().embeddings.create({
+      model: EMBED_MODEL,
+      input: texts
+    });
     const vecs = res.data.map((d) => d.embedding);
-    await logEmbed({
+    await logCall({
       call_type: 'EMBED',
       model: EMBED_MODEL,
       prompt: texts.join('||'),

@@ -4,6 +4,9 @@
 
 @layer base {
   :root {
+    --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
     --background: 0 0% 100%;
     --foreground: 222.2 47.4% 11.2%;
 
@@ -47,8 +50,8 @@
 
   html, body {
     @apply bg-background text-foreground;
-    /* Inter variable features: rlig/calt standard, ss01 alt digits,
-       cv11 single-story a (matches enterprise UI expectations), zero dot for 0 vs O clarity */
+    /* Keep the app fully self-contained; use the local font stack so builds never
+       depend on Google Fonts availability. */
     font-feature-settings: 'rlig' 1, 'calt' 1, 'ss01' 1, 'cv11' 1, 'zero' 1;
     font-synthesis: none;
   }
