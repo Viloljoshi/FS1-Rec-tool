@@ -43,3 +43,4 @@ supabase/.temp
 
 # misc
 *.tgz
+graphify-out/

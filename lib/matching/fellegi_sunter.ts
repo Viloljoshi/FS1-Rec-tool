@@ -73,9 +73,17 @@ export interface PosteriorResult {
   field_scores: FieldScore[];
 }
 
+export interface BandThresholds {
+  high_min: number;
+  medium_min: number;
+}
+
+export const DEFAULT_BANDS: BandThresholds = { high_min: 0.95, medium_min: 0.7 };
+
 export function computePosterior(
   raw: FieldScores,
-  weights: WeightSet = DEFAULT_WEIGHTS
+  weights: WeightSet = DEFAULT_WEIGHTS,
+  bands: BandThresholds = DEFAULT_BANDS
 ): PosteriorResult {
   const field_scores: FieldScore[] = [];
   let total = 0;
@@ -100,6 +108,7 @@ export function computePosterior(
   addField('account', raw.account);
 
   const posterior = sigmoid(total);
-  const band: MatchBand = posterior >= 0.95 ? 'HIGH' : posterior >= 0.7 ? 'MEDIUM' : 'LOW';
+  const band: MatchBand =
+    posterior >= bands.high_min ? 'HIGH' : posterior >= bands.medium_min ? 'MEDIUM' : 'LOW';
   return { posterior, total_weight: total, band, field_scores };
 }

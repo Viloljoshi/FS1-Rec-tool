@@ -8,7 +8,17 @@ const sb = createClient(url, serviceKey, {
   auth: { persistSession: false, autoRefreshToken: false }
 });
 
-async function main() {
+async function runFor(pipelineName: string) {
+  const { data: p } = await sb
+    .from('pipelines')
+    .select('id, asset_class')
+    .eq('name', pipelineName)
+    .maybeSingle();
+  if (!p) {
+    console.log(`pipeline ${pipelineName} not found, skipping`);
+    return;
+  }
+
   const { data: feeds } = await sb
     .from('feed_profiles')
     .select('id, name, version')
@@ -32,10 +42,17 @@ async function main() {
     dateFrom: '2026-04-01',
     dateTo: '2026-04-30',
     initiatedBy: manager?.id ?? null,
-    restrictByCounterpartyEntity: true
+    restrictByCounterpartyEntity: true,
+    pipelineId: p.id
   });
-  console.log(`cycle_id=${r.cycle_id}  matches=${r.match_count}  exceptions=${r.exception_count}`);
-  console.log('counts=' + JSON.stringify(r.counts, null, 2));
+  console.log(
+    `[${pipelineName}] cycle=${r.cycle_id.slice(0, 8)}  matches=${r.match_count}  exceptions=${r.exception_count}  counts=${JSON.stringify(r.counts)}`
+  );
+}
+
+async function main() {
+  const target = process.argv[2] ?? 'Equities';
+  await runFor(target);
 }
 
 main().catch((e) => {

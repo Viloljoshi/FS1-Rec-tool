@@ -92,12 +92,12 @@ export function numericTolerance(a: string, b: string, capRelative = 0.05): numb
   return 1 - diff / capRelative;
 }
 
-export function quantityScore(a: string, b: string): number {
-  return numericTolerance(a, b, 0.05);
+export function quantityScore(a: string, b: string, cap = 0.05): number {
+  return numericTolerance(a, b, cap);
 }
 
-export function priceScore(a: string, b: string): number {
-  return numericTolerance(a, b, 0.01);
+export function priceScore(a: string, b: string, cap = 0.01): number {
+  return numericTolerance(a, b, cap);
 }
 
 export function exactScore<T>(a: T, b: T): number {
@@ -118,14 +118,28 @@ export interface FieldScores {
   account: number;
 }
 
+export interface EngineTolerances {
+  price_rel_tolerance?: number;
+  quantity_rel_tolerance?: number;
+  date_day_delta?: number;
+}
+
+const DEFAULT_TOLERANCES: Required<EngineTolerances> = {
+  price_rel_tolerance: 0.01,
+  quantity_rel_tolerance: 0.05,
+  date_day_delta: 3
+};
+
 export function scoreFields(
   a: NormalizedTrade,
   b: NormalizedTrade,
   embA?: number[] | null,
   embB?: number[] | null,
-  telemetry?: AlgoTelemetry
+  telemetry?: AlgoTelemetry,
+  tolerances?: EngineTolerances
 ): FieldScores {
   void Decimal;
+  const tol = { ...DEFAULT_TOLERANCES, ...(tolerances ?? {}) };
   const isinScore = idExact(a.isin, b.isin);
   if (isinScore !== null) telemetry?.tick('similarity.id_exact');
   const cusipScore = idExact(a.cusip, b.cusip);
@@ -138,11 +152,11 @@ export function scoreFields(
     isin: isinScore,
     cusip: cusipScore,
     symbol: exactScore(a.symbol, b.symbol),
-    trade_date: dateProximity(a.trade_date, b.trade_date),
-    settlement_date: dateProximity(a.settlement_date, b.settlement_date),
+    trade_date: dateProximity(a.trade_date, b.trade_date, tol.date_day_delta),
+    settlement_date: dateProximity(a.settlement_date, b.settlement_date, tol.date_day_delta),
     direction: exactScore(a.direction, b.direction),
-    quantity: quantityScore(a.quantity, b.quantity),
-    price: priceScore(a.price, b.price),
+    quantity: quantityScore(a.quantity, b.quantity, tol.quantity_rel_tolerance),
+    price: priceScore(a.price, b.price, tol.price_rel_tolerance),
     currency: exactScore(a.currency, b.currency),
     counterparty: counterpartySimilarity(a.counterparty, b.counterparty, embA, embB, telemetry),
     account: accountScore

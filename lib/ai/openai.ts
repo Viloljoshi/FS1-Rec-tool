@@ -18,7 +18,8 @@ export type AiCallType =
   | 'RULE_DRAFT'
   | 'SEARCH_PARSE'
   | 'WORKSPACE_SUMMARY'
-  | 'DASHBOARD_NARRATIVE';
+  | 'DASHBOARD_NARRATIVE'
+  | 'PIPELINE_SUGGEST';
 
 interface LogArgs {
   call_type: AiCallType;

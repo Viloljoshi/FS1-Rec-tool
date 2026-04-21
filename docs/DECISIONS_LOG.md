@@ -5,6 +5,80 @@ decisions made during the build. New entries go at the top.
 
 ---
 
+## 2026-04-21 — ADR-012 — Pipeline Profiles: per-asset-class pipeline configuration + AI suggester
+
+**Context:** The matching pipeline has 7 fixed stages (normalize → hash →
+blocking → similarity → Fellegi-Sunter → Hungarian → LLM tiebreak). The
+*sequence* is universal; the *configuration* of each stage (price tolerance,
+quantity tolerance, date proximity, band thresholds, tiebreak band) must
+vary by asset class — FI needs 0.1bp price sensitivity, equities ~1%, FX
+in pips.
+
+Before this change, `matching_rules.tolerances` was stored in the DB but
+silently ignored: `similarity.ts` hardcoded `priceScore(cap=0.01)` and
+`fellegi_sunter.ts` hardcoded band thresholds at `0.95 / 0.70`. A
+`pipelines` table with Equities and FX rows existed but was decorative —
+switching pipelines did not change engine output.
+
+**Decision:** Make the existing infra honest.
+
+1. `scoreFields` now accepts `tolerances: EngineTolerances` and threads
+   `price_rel_tolerance`, `quantity_rel_tolerance`, `date_day_delta`
+   through to `priceScore`, `quantityScore`, `dateProximity`.
+2. `computePosterior` now accepts `bands: BandThresholds`. Default stays
+   at `{high_min: 0.95, medium_min: 0.7}`.
+3. `runMatchingCycle` reads `matching_rules.tolerances.bands` and
+   `matching_rules.tolerances.{price_rel_tolerance,...}` and passes them
+   into `runEngine`.
+4. New **6th AI seam** — `PIPELINE_SUGGEST`. Given feed mapping +
+   sample rows + asset class hint, GPT proposes a tolerances + bands JSON
+   with per-field rationale and warnings. Zod-validated, `ai_calls`
+   audited, falls back to equities defaults on failure.
+5. **UI**: "Suggest with AI" button in the existing `/pipeline` page's
+   Expert Mode — populates the form with GPT's proposal; the analyst
+   publishes it via the existing versioned-rules flow.
+6. **Seeded Fixed Income pipeline** with `price_rel_tolerance: 0.00001`
+   (0.1bp), band `{0.97, 0.72}`.
+
+**Verification:** Same Broker B data, run twice.
+
+| Pipeline | HIGH | MEDIUM | LOW | Exceptions |
+|---|---|---|---|---|
+| Equities (1%, 0.95/0.70) | 87 | 5 | 3 | 13 |
+| Fixed Income (0.1bp, 0.97/0.72) | **82** | **10** | 3 | **18** |
+
+5 trades correctly demoted from HIGH → MEDIUM under FI semantics. The
+tolerances now *actually* change engine behavior, end-to-end.
+
+**Alternatives rejected:**
+- **New `pipeline_profiles` table**: the existing `pipelines` +
+  `matching_rules (weights, tolerances, pipeline_id)` already had the
+  right shape. Adding a parallel table would have duplicated the
+  versioning pattern and broken existing FKs on `matching_cycles`.
+- **Per-stage enablement flags**: deferred. The current 7 stages are
+  universally valid; skipping Hungarian or LLM tiebreak for specific
+  use cases can be a Phase 2 feature.
+- **Let AI write `weights` not just `tolerances`**: too risky without
+  evals — the m/u priors are what makes Fellegi-Sunter principled. AI
+  can tune thresholds; humans own the probabilistic priors.
+
+**Consequence:** Adding a new asset class is now an ops task (seed one
+`pipelines` row + one `matching_rules` row), not a code change. The AI
+suggester gives the first-draft of the config. The 6th seam joins the
+existing 5 in `CLAUDE.md`'s "AI is bounded" rule.
+
+**Files:**
+- `lib/matching/similarity.ts`, `fellegi_sunter.ts`, `engine.ts`, `run-cycle.ts`
+- `lib/ai/openai.ts` (new `AiCallType: 'PIPELINE_SUGGEST'`)
+- `lib/ai/prompts/suggest-pipeline.ts` (new)
+- `app/api/ai/suggest-pipeline/route.ts` (new)
+- `components/pipeline/ExpertMode.tsx` (Suggest with AI button)
+- `app/pipeline/PipelineClient.tsx` (pass asset class + feed to ExpertMode)
+- `tests/matching/pipeline_profile.test.ts` (new — 8 tests)
+- DB: `INSERT INTO pipelines ('Fixed Income', 'FI', ...)` + matching_rules row
+
+---
+
 ## 2026-04-20 — ADR-011 — Split ROUNDING into ROUNDING + WRONG_PRICE
 
 **Context:** The classifier in `lib/matching/run-cycle.ts` labelled every

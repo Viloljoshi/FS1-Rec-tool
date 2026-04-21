@@ -1,8 +1,8 @@
 import { normalizeTrade, type NormalizedTrade, type RawCanonicalTrade } from './normalize';
 import { compositeHash } from './hash';
 import { blockBoth } from './blocking';
-import { scoreFields, type FieldScores } from './similarity';
-import { computePosterior, DEFAULT_WEIGHTS, type WeightSet } from './fellegi_sunter';
+import { scoreFields, type FieldScores, type EngineTolerances } from './similarity';
+import { computePosterior, DEFAULT_WEIGHTS, DEFAULT_BANDS, type WeightSet, type BandThresholds } from './fellegi_sunter';
 import { optimalAssign, type Candidate } from './hungarian';
 import { AlgoTelemetry } from './telemetry';
 import type { MatchExplanation, LLMVerdict, MatchType, MatchBand } from '@/lib/canonical/schema';
@@ -24,6 +24,8 @@ export interface EngineInput {
   side_b: RawCanonicalTrade[];
   weights?: WeightSet;
   embeddings?: Map<string, number[]>;
+  tolerances?: EngineTolerances;
+  bands?: BandThresholds;
 }
 
 export interface CandidateResult {
@@ -43,6 +45,8 @@ export interface EngineOutput {
 
 export function runEngine(input: EngineInput): EngineOutput {
   const weights = input.weights ?? DEFAULT_WEIGHTS;
+  const tolerances = input.tolerances;
+  const bands = input.bands ?? DEFAULT_BANDS;
   const telemetry = new AlgoTelemetry();
   // Sort inputs by trade_id up front so the entire engine is deterministic.
   // Two cycles with identical inputs must produce identical output — without
@@ -83,8 +87,8 @@ export function runEngine(input: EngineInput): EngineOutput {
       continue;
     }
     telemetry.tick('hash.composite_hit');
-    const raw_scores = scoreFields(a, b, null, null, telemetry);
-    const pr = computePosterior(raw_scores, weights);
+    const raw_scores = scoreFields(a, b, null, null, telemetry, tolerances);
+    const pr = computePosterior(raw_scores, weights, bands);
     telemetry.tick('fellegi_sunter.score');
     matches.push({
       trade_a_id: a.trade_id,
@@ -122,8 +126,8 @@ export function runEngine(input: EngineInput): EngineOutput {
         const b = block.b[j]!;
         const embA = input.embeddings?.get(a.counterparty);
         const embB = input.embeddings?.get(b.counterparty);
-        const raw = scoreFields(a, b, embA ?? null, embB ?? null, telemetry);
-        const pr = computePosterior(raw, weights);
+        const raw = scoreFields(a, b, embA ?? null, embB ?? null, telemetry, tolerances);
+        const pr = computePosterior(raw, weights, bands);
         telemetry.tick('fellegi_sunter.score');
         candidates.push({ a_index: i, b_index: j, posterior: pr.posterior });
         scores.push(raw);
@@ -139,7 +143,7 @@ export function runEngine(input: EngineInput): EngineOutput {
       const a = block.a[asn.a_index]!;
       const b = block.b[asn.b_index]!;
       const raw_scores = indexToPair.get(`${asn.a_index}|${asn.b_index}`)!;
-      const pr = computePosterior(raw_scores, weights);
+      const pr = computePosterior(raw_scores, weights, bands);
       const band = applyIntegrityVeto(raw_scores, pr.band);
       if (band !== pr.band && raw_scores.quantity < 0.5) telemetry.tick('fellegi_sunter.veto_qty');
       if (band !== pr.band && raw_scores.price < 0.5 && raw_scores.quantity >= 0.5) telemetry.tick('fellegi_sunter.veto_price');

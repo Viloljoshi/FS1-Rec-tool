@@ -1,7 +1,8 @@
 import { runEngine, type EngineOutput } from './engine';
 import type { RawCanonicalTrade } from './normalize';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { DEFAULT_WEIGHTS, type WeightSet } from './fellegi_sunter';
+import { DEFAULT_WEIGHTS, DEFAULT_BANDS, type WeightSet, type BandThresholds } from './fellegi_sunter';
+import type { EngineTolerances } from './similarity';
 import { ExceptionClass } from '@/lib/canonical/schema';
 import { tiebreak } from '@/lib/ai/prompts/tiebreak';
 import { explainBreak } from '@/lib/ai/prompts/explain-break';
@@ -88,8 +89,31 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
 
   const engineWeights: WeightSet =
     (rulesRow?.weights as WeightSet | null) ?? DEFAULT_WEIGHTS;
+
+  const rawTolerances = (rulesRow?.tolerances ?? {}) as {
+    price_rel_tolerance?: number;
+    quantity_rel_tolerance?: number;
+    date_day_delta?: number;
+    bands?: Partial<BandThresholds>;
+  };
+  const engineTolerances: EngineTolerances = {
+    price_rel_tolerance: rawTolerances.price_rel_tolerance,
+    quantity_rel_tolerance: rawTolerances.quantity_rel_tolerance,
+    date_day_delta: rawTolerances.date_day_delta
+  };
+  const engineBands: BandThresholds = {
+    high_min: rawTolerances.bands?.high_min ?? DEFAULT_BANDS.high_min,
+    medium_min: rawTolerances.bands?.medium_min ?? DEFAULT_BANDS.medium_min
+  };
   logger.info(
-    { pipelineId, rulesId: rulesRow?.id, rulesVersion: rulesRow?.version, usingDbWeights: !!rulesRow?.weights },
+    {
+      pipelineId,
+      rulesId: rulesRow?.id,
+      rulesVersion: rulesRow?.version,
+      usingDbWeights: !!rulesRow?.weights,
+      tolerances: engineTolerances,
+      bands: engineBands
+    },
     'cycle rules resolved'
   );
 
@@ -158,11 +182,13 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
     .single();
   if (cycErr) throw cycErr;
 
-  // 4. Run engine with pipeline-scoped weights
+  // 4. Run engine with pipeline-scoped weights, tolerances, and bands
   const engineOut = runEngine({
     side_a: sideA,
     side_b: sideB,
-    weights: engineWeights
+    weights: engineWeights,
+    tolerances: engineTolerances,
+    bands: engineBands
   });
 
   // Build trade lookup for passing to AI calls

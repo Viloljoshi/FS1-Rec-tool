@@ -51,8 +51,9 @@ Do not use: "source profile", "recon run", "break workspace", "break type",
 
 1. **The demo script is the spec.** See `docs/DEMO_SCRIPT.md`. If a feature does
    not appear in the demo, do not build it.
-2. **AI is bounded to 5 seams.** Schema inference, counterparty semantic
-   similarity, MEDIUM-band tiebreak, exception explanation, next-best-action.
+2. **AI is bounded to 6 seams.** Schema inference, counterparty semantic
+   similarity, MEDIUM-band tiebreak, exception explanation, next-best-action,
+   and pipeline-profile suggestion (asset-class-aware tolerances + bands).
 3. **Deterministic logic runs first, always.** Probabilistic matching only on
    the residuals.
 4. **Every state-changing action writes to `audit_events`.** Append-only,

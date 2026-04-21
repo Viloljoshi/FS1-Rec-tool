@@ -16,7 +16,7 @@ import {
 import { toast } from 'sonner';
 import { AiAssistedBadge } from '@/components/shared/AiAssistedBadge';
 import { PRESETS, detectPreset, type PresetName } from '@/lib/pipeline/presets';
-import { SlidersHorizontal, CheckCircle2, Lock, Loader2, Upload } from 'lucide-react';
+import { SlidersHorizontal, CheckCircle2, Lock, Loader2, Upload, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface ActiveRule {
@@ -35,9 +35,11 @@ interface ExpertModeProps {
   active: ActiveRule | null;
   canEdit: boolean;
   onPublished?: () => void;
+  activePipelineAssetClass?: string | null;
+  activeFeedId?: string | null;
 }
 
-export function ExpertMode({ active, canEdit, onPublished }: ExpertModeProps): React.ReactElement {
+export function ExpertMode({ active, canEdit, onPublished, activePipelineAssetClass, activeFeedId }: ExpertModeProps): React.ReactElement {
   const initialTol = active?.tolerances ?? {};
   const initialBands = initialTol.bands ?? { high_min: 0.95, medium_min: 0.7 };
 
@@ -50,6 +52,46 @@ export function ExpertMode({ active, canEdit, onPublished }: ExpertModeProps): R
     initialTol.llm_tiebreak_band ?? 'MEDIUM_ONLY'
   );
   const [publishing, setPublishing] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
+  const [lastSuggestion, setLastSuggestion] = useState<{ summary: string; warnings: string[] } | null>(null);
+
+  const suggestWithAI = async () => {
+    setSuggesting(true);
+    try {
+      const assetClass = (activePipelineAssetClass as 'EQUITY' | 'FI' | 'FX' | 'FUTURE' | 'OTHER') ?? 'EQUITY';
+      const res = await fetch('/api/ai/suggest-pipeline', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feed_id: activeFeedId ?? undefined, asset_class_hint: assetClass })
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? 'suggestion failed');
+      const { suggestion } = (await res.json()) as {
+        suggestion: {
+          summary: string;
+          tolerances: {
+            price_rel_tolerance: number;
+            quantity_rel_tolerance: number;
+            date_day_delta: number;
+            bands: { high_min: number; medium_min: number };
+          };
+          llm_tiebreak_band: 'MEDIUM_ONLY' | 'ALL' | 'NONE';
+          warnings: string[];
+        };
+      };
+      setBandsHigh(suggestion.tolerances.bands.high_min);
+      setBandsMedium(suggestion.tolerances.bands.medium_min);
+      setPriceTol(suggestion.tolerances.price_rel_tolerance);
+      setQtyTol(suggestion.tolerances.quantity_rel_tolerance);
+      setDateDelta(suggestion.tolerances.date_day_delta);
+      setTiebreakBand(suggestion.llm_tiebreak_band);
+      setLastSuggestion({ summary: suggestion.summary, warnings: suggestion.warnings });
+      toast.success('AI suggestion applied — review, then Publish to save.');
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setSuggesting(false);
+    }
+  };
 
   const currentConfig = {
     bands: { high_min: bandsHigh, medium_min: bandsMedium },
@@ -112,6 +154,45 @@ export function ExpertMode({ active, canEdit, onPublished }: ExpertModeProps): R
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-5">
+        {/* AI Suggester */}
+        <div className="rounded border border-violet-200 bg-violet-50/60 p-3">
+          <div className="flex items-start gap-3">
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-violet-600" />
+                <span className="text-sm font-medium text-slate-800">Suggest pipeline with AI</span>
+                <AiAssistedBadge />
+              </div>
+              <p className="text-[11px] text-slate-600 mt-1 leading-snug">
+                GPT proposes tolerances and bands based on this pipeline&apos;s asset class and a sample of its feed. Review before publishing.
+              </p>
+              {lastSuggestion && (
+                <div className="mt-2 text-[11px] text-slate-700">
+                  <div className="font-medium">Last suggestion</div>
+                  <div className="text-slate-600">{lastSuggestion.summary}</div>
+                  {lastSuggestion.warnings.length > 0 && (
+                    <ul className="mt-1 list-disc ml-4 text-amber-700">
+                      {lastSuggestion.warnings.map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-violet-300 text-violet-800 hover:bg-violet-100"
+              onClick={suggestWithAI}
+              disabled={!canEdit || suggesting}
+            >
+              {suggesting ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1" />}
+              {suggesting ? 'Thinking…' : 'Suggest with AI'}
+            </Button>
+          </div>
+        </div>
+
         {/* Presets */}
         <div>
           <div className="text-[10px] uppercase tracking-wider text-slate-400 font-mono mb-2">Preset profile</div>

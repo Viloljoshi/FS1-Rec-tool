@@ -235,6 +235,8 @@ export function PipelineClient({
         }
         canEdit={canEdit}
         onPublished={() => router.refresh()}
+        activePipelineAssetClass={pipelines.find((p) => p.id === activePipelineId)?.asset_class ?? null}
+        activeFeedId={feeds[0]?.id ?? null}
       />
 
       {/* Rule version history */}
