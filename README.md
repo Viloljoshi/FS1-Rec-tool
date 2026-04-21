@@ -1,9 +1,9 @@
 # ReconAI
 
-**AI-native securities trade reconciliation platform — MVP for the demo purpose.
+AI-native securities trade reconciliation platform — MVP for demo purposes.
 
-Built in a 4-hour weekend sprint as a portfolio artifact for a Senior PM role
-in fintech reconciliation. Feels enterprise-grade; AI is bounded to five
+Built in a weekend sprint as a portfolio artifact for a reconciliation problem statement
+in fintech reconciliation. Feels enterprise-grade; AI is bound to five
 specific seams; every match decision is decomposable and auditable.
 
 - 📄 [Product PRD](docs/PRODUCT_PRD.md)
@@ -20,13 +20,13 @@ specific seams; every match decision is decomposable and auditable.
 
 ## What this is
 
-- **Ingest** unstructured inputs (CSV, XLSX; PDF via Docling on roadmap)
-- **Canonicalize** trades into a versioned, lineage-tracked internal schema
-- **Match** using a 7-layer pipeline: deterministic → probabilistic → AI tiebreak
-- **Manage exceptions** in a 3-pane Bloomberg-terminal-density analyst workspace
-- **Reference data** as a Neo4j knowledge graph (counterparties, aliases, securities)
-- **Audit** every state change in an append-only, RLS-enforced log
-- **Evaluate** AI quality against a curated gold set; precision / recall / F1
+- Ingest unstructured inputs (CSV, XLSX; PDF via Docling on roadmap)
+- Canonicalize trades into a versioned, lineage-tracked internal schema
+- Match using a 7-layer pipeline: deterministic → probabilistic → AI tiebreak
+- Manage exceptions in a 3-pane Bloomberg-terminal-density analyst workspace
+- Reference data as a Neo4j knowledge graph (counterparties, aliases, securities)
+- Audit every state change in an append-only, RLS-enforced log
+- Evaluate AI quality against a curated gold set; precision / recall / F1
 
 ## Stack
 
@@ -76,14 +76,14 @@ Visit http://localhost:3000 and log in with one of the seeded demo users:
 
 ## The five AI seams
 
-1. **Feed schema inference** — GPT-4o-mini proposes canonical mappings from sample rows
-2. **Counterparty embeddings** — semantic similarity for alias resolution
-3. **MEDIUM-band tiebreak** — GPT verdict on ambiguous candidate pairs
-4. **Exception explanation** — analyst-readable rationale for why a match is suggested
-5. **Next-best-action** — suggested resolution for open exceptions
+1. Feed schema inference — GPT-4o-mini proposes canonical mappings from sample rows
+2. Counterparty embeddings — semantic similarity for alias resolution
+3. MEDIUM-band tiebreak — GPT verdict on ambiguous candidate pairs
+4. Exception explanation — analyst-readable rationale for why a match is suggested
+5. Next-best-action — suggested resolution for open exceptions
 
 Every AI call is Zod-validated, prompt-hashed, logged to `ai_calls`, shows an
-**AI-assisted** badge in the UI, and has a deterministic fallback.
+AI-assisted badge in the UI, and has a deterministic fallback.
 
 ## The 7-layer matching pipeline
 
@@ -97,3 +97,5 @@ Every score is decomposable to the field. See `docs/MATCHING_ENGINE.md`.
 ## License
 
 Private portfolio project. Not for redistribution.
+
+
