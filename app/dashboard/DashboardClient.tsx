@@ -663,33 +663,49 @@ export function DashboardClient({
               title="Exception aging"
               hint="Currently-open exceptions bucketed by age in hours. Items in the 7d+ bucket are a red flag — either the queue is understaffed or those items need a different workflow (escalate, batch close)."
             >
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={agingData}>
-                  <XAxis dataKey="bucket" fontSize={11} stroke="#64748b" />
-                  <YAxis fontSize={11} stroke="#64748b" />
-                  <Tooltip />
-                  <Bar dataKey="count" fill="#0f172a" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <div className="w-full h-[200px]">
+                {agingData.every((d) => d.count === 0) ? (
+                  <div className="text-xs text-slate-400 py-16 text-center">
+                    No open exceptions to age.
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={agingData}>
+                      <XAxis dataKey="bucket" fontSize={11} stroke="#64748b" />
+                      <YAxis fontSize={11} stroke="#64748b" allowDecimals={false} />
+                      <Tooltip />
+                      <Bar dataKey="count" fill="#0f172a" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
             </ChartCard>
             <ChartCard
               title="Match rate by recent cycle"
               hint="HIGH-band rate across the last N cycles (chronological). A sudden dip is the first signal that a feed's format changed or a counterparty identifier drifted — investigate before it becomes an SLA miss."
             >
-              <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={rateByCycle}>
-                  <XAxis dataKey="label" fontSize={11} stroke="#64748b" />
-                  <YAxis fontSize={11} stroke="#64748b" domain={[0, 1]} />
-                  <Tooltip formatter={(v: number) => (v * 100).toFixed(0) + '%'} />
-                  <Line
-                    type="monotone"
-                    dataKey="rate"
-                    stroke="#10b981"
-                    strokeWidth={2}
-                    dot={{ r: 3 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              <div className="w-full h-[200px]">
+                {rateByCycle.length === 0 ? (
+                  <div className="text-xs text-slate-400 py-16 text-center">
+                    No completed cycles yet.
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={rateByCycle}>
+                      <XAxis dataKey="label" fontSize={11} stroke="#64748b" />
+                      <YAxis fontSize={11} stroke="#64748b" domain={[0, 1]} />
+                      <Tooltip formatter={(v: number) => (v * 100).toFixed(0) + '%'} />
+                      <Line
+                        type="monotone"
+                        dataKey="rate"
+                        stroke="#10b981"
+                        strokeWidth={2}
+                        dot={{ r: 3 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
             </ChartCard>
           </div>
 

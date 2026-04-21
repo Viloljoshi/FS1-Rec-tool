@@ -11,7 +11,7 @@ import {
   ListChecks,
   Network,
   ShieldCheck,
-  Banknote,
+  Map,
   ArrowLeftRight,
   Workflow,
   ShieldCheck as ShieldCheckIcon
@@ -57,7 +57,7 @@ const SECTIONS: NavSection[] = [
   {
     title: 'Roadmap',
     items: [
-      { href: '/cash',           label: 'Cash (soon)',         icon: Banknote,        roles: ['analyst', 'manager', 'auditor'] }
+      { href: '/roadmap',        label: 'Product Roadmap',     icon: Map,             roles: ['analyst', 'manager', 'auditor'] }
     ]
   }
 ];
