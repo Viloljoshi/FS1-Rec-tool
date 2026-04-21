@@ -25,7 +25,20 @@ function extractJson(raw: string): string {
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-export const CHAT_MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6';
+/**
+ * Per-seam model routing. Reasoning-heavy seams (tiebreak, schema inference,
+ * pipeline suggestion, rule drafts, NL search parsing) get Sonnet; simpler
+ * high-volume seams (explanation, next-best-action, summaries, narratives)
+ * get Haiku. ~5× cheaper per call for equivalent quality on short outputs.
+ *
+ * Override per tier via ANTHROPIC_MODEL_SONNET / ANTHROPIC_MODEL_HAIKU env
+ * vars. ANTHROPIC_MODEL is kept as the Sonnet default for back-compat.
+ */
+const SONNET_MODEL =
+  process.env.ANTHROPIC_MODEL_SONNET ?? process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-6';
+const HAIKU_MODEL = process.env.ANTHROPIC_MODEL_HAIKU ?? 'claude-haiku-4-5';
+/** Back-compat export for modules that imported the singular MODEL constant. */
+export const CHAT_MODEL = SONNET_MODEL;
 const DEFAULT_MAX_TOKENS = 16000;
 
 export type AiCallType =
@@ -39,6 +52,25 @@ export type AiCallType =
   | 'WORKSPACE_SUMMARY'
   | 'DASHBOARD_NARRATIVE'
   | 'PIPELINE_SUGGEST';
+
+type ModelTier = 'sonnet' | 'haiku';
+
+const TIER_BY_CALL_TYPE: Record<AiCallType, ModelTier> = {
+  TIEBREAK: 'sonnet',
+  INFER_SCHEMA: 'sonnet',
+  PIPELINE_SUGGEST: 'sonnet',
+  RULE_DRAFT: 'sonnet',
+  SEARCH_PARSE: 'sonnet',
+  EXPLAIN_BREAK: 'haiku',
+  NEXT_BEST_ACTION: 'haiku',
+  WORKSPACE_SUMMARY: 'haiku',
+  DASHBOARD_NARRATIVE: 'haiku',
+  EMBED: 'sonnet' // never invoked via this wrapper; embeddings go through OpenAI
+};
+
+function modelFor(call_type: AiCallType): string {
+  return TIER_BY_CALL_TYPE[call_type] === 'haiku' ? HAIKU_MODEL : SONNET_MODEL;
+}
 
 interface LogArgs {
   call_type: AiCallType;
@@ -114,7 +146,7 @@ export async function jsonCall<S extends ZodTypeAny>(
       '\n\nIMPORTANT: Respond with a single JSON object only. No prose before or after. No markdown code fences.';
 
     const response = await client.messages.create({
-      model: CHAT_MODEL,
+      model: modelFor(opts.call_type),
       max_tokens: DEFAULT_MAX_TOKENS,
       system: [
         { type: 'text', text: systemWithJsonHint, cache_control: { type: 'ephemeral' } }
@@ -128,7 +160,7 @@ export async function jsonCall<S extends ZodTypeAny>(
     if (response.stop_reason === 'refusal') {
       await logCall({
         call_type: opts.call_type,
-        model: CHAT_MODEL,
+        model: modelFor(opts.call_type),
         prompt,
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
@@ -154,7 +186,7 @@ export async function jsonCall<S extends ZodTypeAny>(
 
     await logCall({
       call_type: opts.call_type,
-      model: CHAT_MODEL,
+      model: modelFor(opts.call_type),
       prompt,
       input_tokens: usage.input_tokens,
       output_tokens: usage.output_tokens,
@@ -185,7 +217,7 @@ export async function jsonCall<S extends ZodTypeAny>(
     logger.error({ err, kind, call_type: opts.call_type }, 'ai jsonCall failed, using fallback');
     await logCall({
       call_type: opts.call_type,
-      model: CHAT_MODEL,
+      model: modelFor(opts.call_type),
       prompt,
       input_tokens: null,
       output_tokens: null,
@@ -217,7 +249,7 @@ export async function textCall(opts: TextCallOptions): Promise<string> {
   const started = Date.now();
   try {
     const response = await client.messages.create({
-      model: CHAT_MODEL,
+      model: modelFor(opts.call_type),
       max_tokens: opts.max_tokens ?? 2048,
       system: [{ type: 'text', text: opts.system, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: opts.user }]
@@ -231,7 +263,7 @@ export async function textCall(opts: TextCallOptions): Promise<string> {
 
     await logCall({
       call_type: opts.call_type,
-      model: CHAT_MODEL,
+      model: modelFor(opts.call_type),
       prompt,
       input_tokens: response.usage.input_tokens,
       output_tokens: response.usage.output_tokens,
@@ -248,7 +280,7 @@ export async function textCall(opts: TextCallOptions): Promise<string> {
     logger.error({ err, call_type: opts.call_type }, 'ai textCall failed, using fallback');
     await logCall({
       call_type: opts.call_type,
-      model: CHAT_MODEL,
+      model: modelFor(opts.call_type),
       prompt,
       input_tokens: null,
       output_tokens: null,

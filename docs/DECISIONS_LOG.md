@@ -5,6 +5,35 @@ decisions made during the build. New entries go at the top.
 
 ---
 
+## 2026-04-21 — ADR-013b — Per-seam model routing (Sonnet for reasoning, Haiku for volume)
+
+Follow-up to ADR-013. All 9 AI seams were initially routed to Sonnet 4.6.
+Sonnet is ~5× more expensive than Haiku 4.5 per output token; for seams
+where reasoning quality isn't the constraint (short explanations,
+single-action recommendations, narrative text), that's waste.
+
+**Decision:** Per-seam routing via `modelFor(call_type)` in
+`lib/ai/anthropic.ts`. Tier map:
+
+| Tier | Seams | Why |
+|---|---|---|
+| **Sonnet 4.6** | `TIEBREAK`, `INFER_SCHEMA`, `PIPELINE_SUGGEST`, `RULE_DRAFT`, `SEARCH_PARSE` | Reasoning-heavy. Wrong answer costs money or analyst trust. |
+| **Haiku 4.5** | `EXPLAIN_BREAK`, `NEXT_BEST_ACTION`, `WORKSPACE_SUMMARY`, `DASHBOARD_NARRATIVE` | Short outputs, templated triage does 80% already, highest call volume (dashboard narrative runs on every load). |
+
+**Env:** `ANTHROPIC_MODEL_SONNET` + `ANTHROPIC_MODEL_HAIKU`.
+`ANTHROPIC_MODEL` kept as a Sonnet fallback for back-compat. Each seam's
+chosen model is persisted on every `ai_calls` row — future cost analysis
+just groups by `model`.
+
+**Expected impact:** dashboard narrative alone is ~100× the call volume
+of tiebreak. Routing it to Haiku is the biggest single win; tiebreak
+stays on Sonnet where the money-decision happens.
+
+**Rollback:** set both env vars to the same model. One env change, no
+code change.
+
+---
+
 ## 2026-04-21 — ADR-013 — Chat moves to Anthropic Claude Sonnet 4.6; embeddings stay on OpenAI
 
 **Context:** The build started on OpenAI `gpt-4o-mini` via `openai` SDK's
