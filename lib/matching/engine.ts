@@ -1,11 +1,32 @@
 import { normalizeTrade, type NormalizedTrade, type RawCanonicalTrade } from './normalize';
 import { compositeHash } from './hash';
-import { blockBoth } from './blocking';
+import { blockBoth, type BlockingField, DEFAULT_BLOCKING_KEYS } from './blocking';
 import { scoreFields, type FieldScores, type EngineTolerances } from './similarity';
 import { computePosterior, DEFAULT_WEIGHTS, DEFAULT_BANDS, type WeightSet, type BandThresholds } from './fellegi_sunter';
 import { optimalAssign, type Candidate } from './hungarian';
 import { AlgoTelemetry } from './telemetry';
 import type { MatchExplanation, LLMVerdict, MatchType, MatchBand } from '@/lib/canonical/schema';
+
+export type PipelineStageId =
+  | 'normalize'
+  | 'hash'
+  | 'blocking'
+  | 'similarity'
+  | 'fellegi_sunter'
+  | 'hungarian'
+  | 'llm_tiebreak';
+
+export const DEFAULT_ENABLED_STAGES: PipelineStageId[] = [
+  'normalize',
+  'hash',
+  'blocking',
+  'similarity',
+  'fellegi_sunter',
+  'hungarian',
+  'llm_tiebreak'
+];
+
+export type SupportedMatchType = '1:1' | '1:N' | 'N:1' | 'N:M';
 
 /**
  * Integrity veto: quantity or price disagreement beyond tolerance is a
@@ -26,6 +47,22 @@ export interface EngineInput {
   embeddings?: Map<string, number[]>;
   tolerances?: EngineTolerances;
   bands?: BandThresholds;
+  blocking_keys?: BlockingField[];
+  /**
+   * Which stages to run. Stages listed here are executed in the fixed order;
+   * stages omitted are skipped. `normalize` + `fellegi_sunter` are always
+   * executed (they are not truly optional — the whole engine assumes
+   * normalized inputs and every match needs a posterior).
+   */
+  enabled_stages?: PipelineStageId[];
+  /**
+   * Match types this pipeline accepts. The engine currently only emits 1:1
+   * assignments; if `1:N`/`N:M` are configured, the engine still runs 1:1
+   * but the field is stamped on each result so downstream consumers (UI,
+   * exception classifier) know the config intent. Full 1:N support is a
+   * separate workstream in Hungarian — tracked in ADR-012.
+   */
+  match_types?: SupportedMatchType[];
 }
 
 export interface CandidateResult {
@@ -47,6 +84,15 @@ export function runEngine(input: EngineInput): EngineOutput {
   const weights = input.weights ?? DEFAULT_WEIGHTS;
   const tolerances = input.tolerances;
   const bands = input.bands ?? DEFAULT_BANDS;
+  const blockingKeys = input.blocking_keys ?? DEFAULT_BLOCKING_KEYS;
+  const enabledSet = new Set<PipelineStageId>(input.enabled_stages ?? DEFAULT_ENABLED_STAGES);
+  // normalize + fellegi_sunter are load-bearing; force them on even if caller omitted them.
+  enabledSet.add('normalize');
+  enabledSet.add('fellegi_sunter');
+  const hashEnabled = enabledSet.has('hash');
+  const blockingEnabled = enabledSet.has('blocking');
+  const hungarianEnabled = enabledSet.has('hungarian');
+  const primaryMatchType: MatchType = (input.match_types?.[0] ?? '1:1') as MatchType;
   const telemetry = new AlgoTelemetry();
   // Sort inputs by trade_id up front so the entire engine is deterministic.
   // Two cycles with identical inputs must produce identical output — without
@@ -69,50 +115,56 @@ export function runEngine(input: EngineInput): EngineOutput {
     return normalizeTrade(t);
   });
 
-  // Deterministic pass
-  const hashA = new Map<string, NormalizedTrade>();
-  const hashB = new Map<string, NormalizedTrade>();
-  for (const t of normA) hashA.set(compositeHash(t), t);
-  for (const t of normB) hashB.set(compositeHash(t), t);
-
+  // Deterministic pass (stage: hash)
   const consumedA = new Set<string>();
   const consumedB = new Set<string>();
   const matches: CandidateResult[] = [];
   let deterministic = 0;
 
-  for (const [h, a] of hashA) {
-    const b = hashB.get(h);
-    if (!b) {
-      telemetry.tick('hash.composite_miss');
-      continue;
-    }
-    telemetry.tick('hash.composite_hit');
-    const raw_scores = scoreFields(a, b, null, null, telemetry, tolerances);
-    const pr = computePosterior(raw_scores, weights, bands);
-    telemetry.tick('fellegi_sunter.score');
-    matches.push({
-      trade_a_id: a.trade_id,
-      trade_b_id: b.trade_id,
-      raw_scores,
-      explanation: {
-        posterior: Math.max(pr.posterior, 0.99),
-        band: 'HIGH',
-        match_type: '1:1',
-        field_scores: pr.field_scores,
-        deterministic_hit: true,
-        llm_verdict: null
+  if (hashEnabled) {
+    const hashA = new Map<string, NormalizedTrade>();
+    const hashB = new Map<string, NormalizedTrade>();
+    for (const t of normA) hashA.set(compositeHash(t), t);
+    for (const t of normB) hashB.set(compositeHash(t), t);
+
+    for (const [h, a] of hashA) {
+      const b = hashB.get(h);
+      if (!b) {
+        telemetry.tick('hash.composite_miss');
+        continue;
       }
-    });
-    consumedA.add(a.trade_id);
-    consumedB.add(b.trade_id);
-    deterministic += 1;
+      telemetry.tick('hash.composite_hit');
+      const raw_scores = scoreFields(a, b, null, null, telemetry, tolerances);
+      const pr = computePosterior(raw_scores, weights, bands);
+      telemetry.tick('fellegi_sunter.score');
+      matches.push({
+        trade_a_id: a.trade_id,
+        trade_b_id: b.trade_id,
+        raw_scores,
+        explanation: {
+          posterior: Math.max(pr.posterior, 0.99),
+          band: 'HIGH',
+          match_type: primaryMatchType,
+          field_scores: pr.field_scores,
+          deterministic_hit: true,
+          llm_verdict: null
+        }
+      });
+      consumedA.add(a.trade_id);
+      consumedB.add(b.trade_id);
+      deterministic += 1;
+    }
+  } else {
+    telemetry.tick('hash.skipped');
   }
 
-  // Probabilistic pass over remaining
+  // Probabilistic pass (stage: blocking + similarity + hungarian)
   const remainingA = normA.filter((t) => !consumedA.has(t.trade_id));
   const remainingB = normB.filter((t) => !consumedB.has(t.trade_id));
-  const blocks = blockBoth(remainingA, remainingB);
-  telemetry.tick('blocking.standard', blocks.size);
+  const blocks = blockingEnabled
+    ? blockBoth(remainingA, remainingB, blockingKeys)
+    : new Map([['__all__', { a: remainingA, b: remainingB }]]);
+  telemetry.tick(blockingEnabled ? 'blocking.standard' : 'blocking.skipped', blocks.size);
 
   for (const block of blocks.values()) {
     if (block.a.length === 0 || block.b.length === 0) continue;
@@ -135,9 +187,20 @@ export function runEngine(input: EngineInput): EngineOutput {
       }
     }
 
-    const assignments = optimalAssign(block.a.length, block.b.length, candidates, 0.5);
-    telemetry.tick('hungarian.block_solved');
-    telemetry.tick('hungarian.assigned', assignments.length);
+    // Stage: hungarian. If disabled, greedily take each pair whose posterior
+    // clears 0.5 threshold (no one-to-one guarantee). Useful for N:M regimes
+    // and as an escape hatch when Hungarian's cost is prohibitive.
+    let assignments: { a_index: number; b_index: number }[];
+    if (hungarianEnabled) {
+      assignments = optimalAssign(block.a.length, block.b.length, candidates, 0.5);
+      telemetry.tick('hungarian.block_solved');
+      telemetry.tick('hungarian.assigned', assignments.length);
+    } else {
+      assignments = candidates
+        .filter((c) => c.posterior >= 0.5)
+        .map(({ a_index, b_index }) => ({ a_index, b_index }));
+      telemetry.tick('hungarian.skipped');
+    }
 
     for (const asn of assignments) {
       const a = block.a[asn.a_index]!;
@@ -154,7 +217,7 @@ export function runEngine(input: EngineInput): EngineOutput {
         explanation: {
           posterior: pr.posterior,
           band,
-          match_type: '1:1' as MatchType,
+          match_type: primaryMatchType,
           field_scores: pr.field_scores,
           deterministic_hit: false,
           llm_verdict: null

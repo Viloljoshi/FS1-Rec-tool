@@ -12,6 +12,114 @@ import { formatDistanceToNow } from 'date-fns';
 import { ExpertMode } from '@/components/pipeline/ExpertMode';
 import { RuleDraftsCard } from '@/components/pipeline/RuleDraftsCard';
 import { useRouter } from 'next/navigation';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select';
+import { Plus, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
+
+function NewPipelineButton(): React.ReactElement {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [assetClass, setAssetClass] = useState<'EQUITY' | 'FI' | 'FX' | 'FUTURE' | 'OTHER'>('EQUITY');
+  const [description, setDescription] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const save = async (): Promise<void> => {
+    setSaving(true);
+    try {
+      const res = await fetch('/api/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: name.trim(),
+          asset_class: assetClass,
+          description: description.trim() || undefined
+        })
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? 'create failed');
+      toast.success(`Pipeline '${name}' created`);
+      setOpen(false);
+      setName('');
+      setDescription('');
+      router.refresh();
+      router.push(`/pipeline?pipeline=${encodeURIComponent(name)}`);
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="px-3 py-1.5 rounded text-xs font-medium border border-dashed border-slate-300 text-slate-600 hover:bg-slate-50"
+      >
+        <Plus className="h-3 w-3 inline mr-1" />
+        New pipeline
+      </button>
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent side="right" className="sm:max-w-md">
+          <SheetHeader>
+            <SheetTitle>Create pipeline</SheetTitle>
+          </SheetHeader>
+          <div className="space-y-4 mt-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs uppercase tracking-wider text-slate-500">Name</Label>
+              <Input
+                placeholder="e.g. Futures Cleared"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs uppercase tracking-wider text-slate-500">Asset class</Label>
+              <Select value={assetClass} onValueChange={(v) => setAssetClass(v as typeof assetClass)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="EQUITY">EQUITY</SelectItem>
+                  <SelectItem value="FI">FI</SelectItem>
+                  <SelectItem value="FX">FX</SelectItem>
+                  <SelectItem value="FUTURE">FUTURE</SelectItem>
+                  <SelectItem value="OTHER">OTHER</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs uppercase tracking-wider text-slate-500">Description</Label>
+              <Input
+                placeholder="Optional — what this pipeline is for"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </div>
+            <p className="text-[11px] text-slate-500">
+              A default <span className="font-mono">matching_rules</span> row is seeded with
+              equities-flavoured tolerances. Use "Suggest with AI" in Expert Mode to retune for
+              the asset class.
+            </p>
+            <Button onClick={save} disabled={saving || !name.trim()} className="w-full">
+              {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+              Create pipeline
+            </Button>
+          </div>
+        </SheetContent>
+      </Sheet>
+    </>
+  );
+}
 
 interface RuleRow {
   id: string;
@@ -94,44 +202,43 @@ export function PipelineClient({
 
   return (
     <div className="space-y-6">
-      {pipelines.length > 1 && (
-        <div className="flex items-center gap-2 border-b border-slate-200 pb-3">
-          <span className="text-[10px] uppercase tracking-wider text-slate-400 font-mono mr-2">
-            Pipeline
-          </span>
-          {pipelines.map((p) => {
-            const isActive = p.id === activePipelineId;
-            return (
-              <button
-                key={p.id}
-                onClick={() => switchPipeline(p.name)}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-3 flex-wrap">
+        <span className="text-[10px] uppercase tracking-wider text-slate-400 font-mono mr-2">
+          Pipeline
+        </span>
+        {pipelines.map((p) => {
+          const isActive = p.id === activePipelineId;
+          return (
+            <button
+              key={p.id}
+              onClick={() => switchPipeline(p.name)}
+              className={cn(
+                'px-3 py-1.5 rounded text-xs font-medium transition border',
+                isActive
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+              )}
+              aria-pressed={isActive}
+            >
+              <span>{p.name}</span>
+              <span
                 className={cn(
-                  'px-3 py-1.5 rounded text-xs font-medium transition border',
-                  isActive
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                  'ml-2 font-mono text-[10px]',
+                  isActive ? 'text-slate-300' : 'text-slate-400'
                 )}
-                aria-pressed={isActive}
               >
-                <span>{p.name}</span>
-                <span
-                  className={cn(
-                    'ml-2 font-mono text-[10px]',
-                    isActive ? 'text-slate-300' : 'text-slate-400'
-                  )}
-                >
-                  {p.asset_class}
-                </span>
-              </button>
-            );
-          })}
-          {activePipeline?.description && (
-            <span className="text-[11px] text-slate-500 ml-3 hidden md:inline">
-              {activePipeline.description}
-            </span>
-          )}
-        </div>
-      )}
+                {p.asset_class}
+              </span>
+            </button>
+          );
+        })}
+        {canEdit && <NewPipelineButton />}
+        {activePipeline?.description && (
+          <span className="text-[11px] text-slate-500 ml-3 hidden md:inline">
+            {activePipeline.description}
+          </span>
+        )}
+      </div>
       {/* AI narrative header */}
       <Card className="border-violet-200 bg-violet-50/30">
         <CardContent className="py-4 flex items-start gap-3">
@@ -235,6 +342,7 @@ export function PipelineClient({
         }
         canEdit={canEdit}
         onPublished={() => router.refresh()}
+        activePipelineId={activePipelineId}
         activePipelineAssetClass={pipelines.find((p) => p.id === activePipelineId)?.asset_class ?? null}
         activeFeedId={feeds[0]?.id ?? null}
       />

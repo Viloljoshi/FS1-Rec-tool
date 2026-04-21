@@ -1,8 +1,9 @@
-import { runEngine, type EngineOutput } from './engine';
+import { runEngine, type EngineOutput, type PipelineStageId, type SupportedMatchType, DEFAULT_ENABLED_STAGES } from './engine';
 import type { RawCanonicalTrade } from './normalize';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { DEFAULT_WEIGHTS, DEFAULT_BANDS, type WeightSet, type BandThresholds } from './fellegi_sunter';
 import type { EngineTolerances } from './similarity';
+import type { BlockingField } from './blocking';
 import { ExceptionClass } from '@/lib/canonical/schema';
 import { tiebreak } from '@/lib/ai/prompts/tiebreak';
 import { explainBreak } from '@/lib/ai/prompts/explain-break';
@@ -95,6 +96,10 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
     quantity_rel_tolerance?: number;
     date_day_delta?: number;
     bands?: Partial<BandThresholds>;
+    blocking_keys?: BlockingField[];
+    enabled_stages?: PipelineStageId[];
+    match_types?: SupportedMatchType[];
+    llm_tiebreak_band?: 'MEDIUM_ONLY' | 'ALL' | 'NONE';
   };
   const engineTolerances: EngineTolerances = {
     price_rel_tolerance: rawTolerances.price_rel_tolerance,
@@ -105,6 +110,10 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
     high_min: rawTolerances.bands?.high_min ?? DEFAULT_BANDS.high_min,
     medium_min: rawTolerances.bands?.medium_min ?? DEFAULT_BANDS.medium_min
   };
+  const enabledStages: PipelineStageId[] = rawTolerances.enabled_stages ?? DEFAULT_ENABLED_STAGES;
+  const blockingKeys: BlockingField[] | undefined = rawTolerances.blocking_keys;
+  const matchTypes: SupportedMatchType[] = rawTolerances.match_types ?? ['1:1'];
+  const llmTiebreakBand: 'MEDIUM_ONLY' | 'ALL' | 'NONE' = rawTolerances.llm_tiebreak_band ?? 'MEDIUM_ONLY';
   logger.info(
     {
       pipelineId,
@@ -112,7 +121,11 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
       rulesVersion: rulesRow?.version,
       usingDbWeights: !!rulesRow?.weights,
       tolerances: engineTolerances,
-      bands: engineBands
+      bands: engineBands,
+      enabledStages,
+      blockingKeys,
+      matchTypes,
+      llmTiebreakBand
     },
     'cycle rules resolved'
   );
@@ -182,25 +195,39 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
     .single();
   if (cycErr) throw cycErr;
 
-  // 4. Run engine with pipeline-scoped weights, tolerances, and bands
+  // 4. Run engine with fully pipeline-scoped config
   const engineOut = runEngine({
     side_a: sideA,
     side_b: sideB,
     weights: engineWeights,
     tolerances: engineTolerances,
-    bands: engineBands
+    bands: engineBands,
+    blocking_keys: blockingKeys,
+    enabled_stages: enabledStages,
+    match_types: matchTypes
   });
 
   // Build trade lookup for passing to AI calls
   const tradeById = new Map<string, RawCanonicalTrade>();
   for (const t of [...sideA, ...sideB]) tradeById.set(t.trade_id, t);
 
-  // 4a. LLM tiebreak — run GPT-5.4 on every MEDIUM-band match in parallel (capped)
-  const mediumMatches = engineOut.matches.filter((m) => m.explanation.band === 'MEDIUM');
+  // 4a. LLM tiebreak — selection driven by pipeline's `llm_tiebreak_band`:
+  //   MEDIUM_ONLY (default) — only MEDIUM-band matches
+  //   ALL                    — every non-deterministic MEDIUM + LOW match
+  //   NONE                   — skip entirely (futures / exchange-cleared)
+  // Also fully skipped if the `llm_tiebreak` stage is disabled in `enabled_stages`.
+  const tiebreakStageEnabled = enabledStages.includes('llm_tiebreak') && llmTiebreakBand !== 'NONE';
+  const tiebreakMatches = tiebreakStageEnabled
+    ? engineOut.matches.filter((m) => {
+        if (m.explanation.deterministic_hit) return false;
+        if (llmTiebreakBand === 'ALL') return m.explanation.band === 'MEDIUM' || m.explanation.band === 'LOW';
+        return m.explanation.band === 'MEDIUM';
+      })
+    : [];
   let tiebreakCalls = 0;
-  if (mediumMatches.length > 0) {
-    logger.info({ count: mediumMatches.length }, 'running LLM tiebreak on MEDIUM band matches');
-    await mapLimit(mediumMatches, 4, async (m) => {
+  if (tiebreakMatches.length > 0) {
+    logger.info({ count: tiebreakMatches.length, band: llmTiebreakBand }, 'running LLM tiebreak');
+    await mapLimit(tiebreakMatches, 4, async (m) => {
       const tA = tradeById.get(m.trade_a_id);
       const tB = tradeById.get(m.trade_b_id);
       if (!tA || !tB) return;

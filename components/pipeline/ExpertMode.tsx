@@ -19,6 +19,25 @@ import { PRESETS, detectPreset, type PresetName } from '@/lib/pipeline/presets';
 import { SlidersHorizontal, CheckCircle2, Lock, Loader2, Upload, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+type BlockingField =
+  | 'symbol'
+  | 'isin'
+  | 'cusip'
+  | 'trade_date'
+  | 'settlement_date'
+  | 'direction'
+  | 'currency'
+  | 'account';
+type PipelineStageId =
+  | 'normalize'
+  | 'hash'
+  | 'blocking'
+  | 'similarity'
+  | 'fellegi_sunter'
+  | 'hungarian'
+  | 'llm_tiebreak';
+type MatchTypeLabel = '1:1' | '1:N' | 'N:1' | 'N:M';
+
 interface ActiveRule {
   version: number;
   tolerances: {
@@ -27,6 +46,9 @@ interface ActiveRule {
     date_day_delta?: number;
     bands?: { high_min: number; medium_min: number };
     llm_tiebreak_band?: 'MEDIUM_ONLY' | 'ALL' | 'NONE';
+    blocking_keys?: BlockingField[];
+    enabled_stages?: PipelineStageId[];
+    match_types?: MatchTypeLabel[];
     preset?: string;
   } | null;
 }
@@ -35,11 +57,12 @@ interface ExpertModeProps {
   active: ActiveRule | null;
   canEdit: boolean;
   onPublished?: () => void;
+  activePipelineId?: string | null;
   activePipelineAssetClass?: string | null;
   activeFeedId?: string | null;
 }
 
-export function ExpertMode({ active, canEdit, onPublished, activePipelineAssetClass, activeFeedId }: ExpertModeProps): React.ReactElement {
+export function ExpertMode({ active, canEdit, onPublished, activePipelineId, activePipelineAssetClass, activeFeedId }: ExpertModeProps): React.ReactElement {
   const initialTol = active?.tolerances ?? {};
   const initialBands = initialTol.bands ?? { high_min: 0.95, medium_min: 0.7 };
 
@@ -50,6 +73,25 @@ export function ExpertMode({ active, canEdit, onPublished, activePipelineAssetCl
   const [dateDelta, setDateDelta] = useState(initialTol.date_day_delta ?? 1);
   const [tiebreakBand, setTiebreakBand] = useState<'MEDIUM_ONLY' | 'ALL' | 'NONE'>(
     initialTol.llm_tiebreak_band ?? 'MEDIUM_ONLY'
+  );
+  const DEFAULT_BLOCKING: BlockingField[] = ['symbol', 'trade_date', 'direction'];
+  const DEFAULT_STAGES: PipelineStageId[] = [
+    'normalize',
+    'hash',
+    'blocking',
+    'similarity',
+    'fellegi_sunter',
+    'hungarian',
+    'llm_tiebreak'
+  ];
+  const [blockingKeys, setBlockingKeys] = useState<BlockingField[]>(
+    initialTol.blocking_keys ?? DEFAULT_BLOCKING
+  );
+  const [enabledStages, setEnabledStages] = useState<PipelineStageId[]>(
+    initialTol.enabled_stages ?? DEFAULT_STAGES
+  );
+  const [matchTypes, setMatchTypes] = useState<MatchTypeLabel[]>(
+    initialTol.match_types ?? ['1:1']
   );
   const [publishing, setPublishing] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
@@ -75,6 +117,9 @@ export function ExpertMode({ active, canEdit, onPublished, activePipelineAssetCl
             bands: { high_min: number; medium_min: number };
           };
           llm_tiebreak_band: 'MEDIUM_ONLY' | 'ALL' | 'NONE';
+          blocking_keys?: BlockingField[];
+          enabled_stages?: PipelineStageId[];
+          match_types?: MatchTypeLabel[];
           warnings: string[];
         };
       };
@@ -84,6 +129,9 @@ export function ExpertMode({ active, canEdit, onPublished, activePipelineAssetCl
       setQtyTol(suggestion.tolerances.quantity_rel_tolerance);
       setDateDelta(suggestion.tolerances.date_day_delta);
       setTiebreakBand(suggestion.llm_tiebreak_band);
+      if (suggestion.blocking_keys && suggestion.blocking_keys.length > 0) setBlockingKeys(suggestion.blocking_keys);
+      if (suggestion.enabled_stages && suggestion.enabled_stages.length > 0) setEnabledStages(suggestion.enabled_stages);
+      if (suggestion.match_types && suggestion.match_types.length > 0) setMatchTypes(suggestion.match_types);
       setLastSuggestion({ summary: suggestion.summary, warnings: suggestion.warnings });
       toast.success('AI suggestion applied — review, then Publish to save.');
     } catch (err) {
@@ -124,10 +172,14 @@ export function ExpertMode({ active, canEdit, onPublished, activePipelineAssetCl
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          pipeline_id: activePipelineId ?? undefined,
           preset: detected,
           bands: currentConfig.bands,
           tolerances: currentConfig.tolerances,
           llm_tiebreak_band: tiebreakBand,
+          blocking_keys: blockingKeys,
+          enabled_stages: enabledStages,
+          match_types: matchTypes,
           reason: `Published ${detected} via pipeline expert mode`
         })
       });
@@ -314,6 +366,143 @@ export function ExpertMode({ active, canEdit, onPublished, activePipelineAssetCl
                 </SelectContent>
               </Select>
               <p className="text-[10px] text-slate-400">Which bands send to the AI tiebreak.</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Per-pipeline structural config: blocking keys, stage enablement, match types */}
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-slate-400 font-mono mb-2">
+            Pipeline structure
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase tracking-wider text-slate-500">
+                Blocking keys
+              </Label>
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    'symbol',
+                    'isin',
+                    'cusip',
+                    'trade_date',
+                    'settlement_date',
+                    'direction',
+                    'currency',
+                    'account'
+                  ] as BlockingField[]
+                ).map((k) => {
+                  const on = blockingKeys.includes(k);
+                  return (
+                    <button
+                      key={k}
+                      disabled={!canEdit}
+                      onClick={() => {
+                        if (!canEdit) return;
+                        setBlockingKeys((prev) =>
+                          prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]
+                        );
+                      }}
+                      className={cn(
+                        'text-[10px] font-mono px-2 py-0.5 rounded border transition',
+                        on
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50',
+                        !canEdit && 'opacity-60 cursor-not-allowed'
+                      )}
+                    >
+                      {k}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-slate-400">
+                Fields grouped before scoring. Reduces candidate pairs 100–1000×.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase tracking-wider text-slate-500">
+                Enabled stages
+              </Label>
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    'normalize',
+                    'hash',
+                    'blocking',
+                    'similarity',
+                    'fellegi_sunter',
+                    'hungarian',
+                    'llm_tiebreak'
+                  ] as PipelineStageId[]
+                ).map((s) => {
+                  const on = enabledStages.includes(s);
+                  const forced = s === 'normalize' || s === 'fellegi_sunter';
+                  return (
+                    <button
+                      key={s}
+                      disabled={!canEdit || forced}
+                      onClick={() => {
+                        if (!canEdit || forced) return;
+                        setEnabledStages((prev) =>
+                          prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
+                        );
+                      }}
+                      className={cn(
+                        'text-[10px] font-mono px-2 py-0.5 rounded border transition',
+                        on
+                          ? 'bg-emerald-700 text-white border-emerald-700'
+                          : 'bg-white text-slate-500 border-slate-200',
+                        (forced || !canEdit) && 'opacity-80 cursor-not-allowed'
+                      )}
+                      title={forced ? 'Load-bearing — cannot disable' : undefined}
+                    >
+                      {s}
+                      {forced && <span className="ml-1 opacity-70">•</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-slate-400">
+                <span className="font-mono">normalize</span> + <span className="font-mono">fellegi_sunter</span> are always on.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase tracking-wider text-slate-500">
+                Match types
+              </Label>
+              <div className="flex flex-wrap gap-1.5">
+                {(['1:1', '1:N', 'N:1', 'N:M'] as MatchTypeLabel[]).map((m) => {
+                  const on = matchTypes.includes(m);
+                  return (
+                    <button
+                      key={m}
+                      disabled={!canEdit}
+                      onClick={() => {
+                        if (!canEdit) return;
+                        setMatchTypes((prev) =>
+                          prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]
+                        );
+                      }}
+                      className={cn(
+                        'text-[10px] font-mono px-2 py-0.5 rounded border transition',
+                        on
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50',
+                        !canEdit && 'opacity-60 cursor-not-allowed'
+                      )}
+                    >
+                      {m}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-slate-400">
+                Engine emits 1:1 today; 1:N/N:M stamp intent — full support tracked in ADR-012.
+              </p>
             </div>
           </div>
         </div>

@@ -5,6 +5,82 @@ decisions made during the build. New entries go at the top.
 
 ---
 
+## 2026-04-21 — ADR-012b — Pipeline Profiles: full end-to-end per-asset-class config
+
+Follow-up to ADR-012. The original ADR claimed "per-asset-class pipelines"
+but only tolerances and band thresholds actually flowed to the engine.
+Blocking keys, stage enablement, match types, and the LLM tiebreak band
+were stored in the config but ignored by runtime code. This entry closes
+the honesty gap and documents what is now truly end-to-end.
+
+**What changed in this round:**
+
+1. **Blocking keys per pipeline.** `lib/matching/blocking.ts` now takes a
+   `keys: BlockingField[]` array. `blockingKey` / `blockBoth` / `blockWithLooseDate`
+   all compose the block key from that array. FI blocks on `[isin, trade_date, direction]`;
+   FX blocks on `[symbol, settlement_date, direction, currency]`; Equities stays on
+   the default `[symbol, trade_date, direction]`.
+2. **Stage enablement.** `runEngine` now respects `enabled_stages: PipelineStageId[]`.
+   Omitted stages are skipped at runtime:
+   - `hash` omitted → deterministic pass skipped, everything falls to probabilistic
+     (FX uses this because its confirmation IDs rarely match between sides).
+   - `blocking` omitted → everything goes into one all-vs-all bucket.
+   - `hungarian` omitted → greedy thresholded assignment instead of one-to-one optimum.
+   - `llm_tiebreak` omitted (or `llm_tiebreak_band: 'NONE'`) → no GPT tiebreak.
+   - `normalize` and `fellegi_sunter` are load-bearing and cannot be disabled —
+     the engine force-adds them if the caller tries.
+3. **LLM tiebreak band honored.** `llm_tiebreak_band` of `MEDIUM_ONLY` / `ALL` /
+   `NONE` now actually filters `run-cycle.ts`'s tiebreak selection.
+   Deterministic hits are never tiebroken; `ALL` covers LOW + MEDIUM; `NONE`
+   skips entirely.
+4. **match_types honored.** Engine currently emits 1:1 assignments (Hungarian
+   is by design 1:1). But the primary `match_types[0]` from the pipeline
+   config is stamped onto every `match_result.match_type` field so downstream
+   consumers (exception classifier, UI) see the pipeline's intent. Full 1:N
+   allocation support is a separate workstream in Hungarian and tracked
+   here as future work.
+5. **Publish endpoint scoped + extended.** `/api/pipeline/publish` now takes
+   an optional `pipeline_id` (defaulting to Equities for back-compat), scopes
+   the version bump to that pipeline only, and accepts `blocking_keys`,
+   `enabled_stages`, `match_types` alongside the existing knobs.
+6. **Create Pipeline endpoint + UI.** New `/api/pipelines` POST lets managers
+   create a pipeline and seed its matching_rules row in one call. The
+   `/pipeline` page now has a "New pipeline" button that opens a modal to
+   set name + asset class + description.
+7. **Suggester prompt extended.** GPT now returns `blocking_keys`,
+   `enabled_stages`, `match_types` alongside tolerances. Schema lives in
+   `lib/ai/schemas/pipeline-suggestion.ts` (split from the prompt module so
+   tests can import it without triggering the OpenAI client).
+8. **FI seed data.** 16 bond trades across two FI feeds inserted: 6 exact
+   matches (expected HIGH via hash), 1 sub-cent-drift (expected HIGH via hash
+   on rounded price), 1 material 0.5%-drift (expected MEDIUM/LOW under FI's
+   tight tolerance). The FI cycle is now runnable against realistic data.
+9. **UI surface for the new fields.** ExpertMode has new chips for blocking
+   keys (multi-select from 8 fields), enabled stages (with normalize + fellegi_sunter
+   locked on), and match types (1:1 / 1:N / N:1 / N:M). Publishing writes all of
+   this into `matching_rules.tolerances`.
+10. **Tests.** 11 new tests in `tests/matching/pipeline_stages.test.ts` cover
+    blocking key variations, stage skipping actually skipping, match_types
+    stamping, and the suggester schema rejecting malformed output. Total
+    suite: 57 passing.
+
+**Verification:** Same underlying data, two pipelines, different runtime
+paths now *observed in the logs* (not just stored in the DB):
+
+| Pipeline | Blocking | Stages enabled | Tiebreak | Effect |
+|---|---|---|---|---|
+| Equities | symbol/date/dir | all 7 | MEDIUM | hash catches most, GPT on ambiguous |
+| FX | symbol/settle/dir/ccy | 6 (no hash) | MEDIUM | all trades go probabilistic |
+| Fixed Income | ISIN/date/dir | all 7, tight tolerance | MEDIUM | 6 hash hits, 1 demote to MEDIUM on 0.5% break |
+
+The claim "per-asset-class pipelines, end-to-end" is now honest. The only
+gap remaining is full 1:N / N:M allocation support in Hungarian; the
+config surface accepts `match_types: ['1:1', '1:N']` and the UI lets you
+toggle it, but the engine still physically emits 1:1 assignments. This is
+called out in the match_types UI hint text and tracked as future work.
+
+---
+
 ## 2026-04-21 — ADR-012 — Pipeline Profiles: per-asset-class pipeline configuration + AI suggester
 
 **Context:** The matching pipeline has 7 fixed stages (normalize → hash →
