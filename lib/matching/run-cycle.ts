@@ -32,6 +32,11 @@ interface RunOptions {
    * Used by the async route pattern: row pre-created → background execution.
    */
   existingCycleId?: string;
+  /**
+   * When true, skip LLM tiebreak and AI explain-break so the cycle fits
+   * inside Netlify's 26s function limit. Templated triage still runs.
+   */
+  skipAi?: boolean;
 }
 
 export interface CycleResult {
@@ -231,7 +236,7 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
   //   ALL                    — every non-deterministic MEDIUM + LOW match
   //   NONE                   — skip entirely (futures / exchange-cleared)
   // Also fully skipped if the `llm_tiebreak` stage is disabled in `enabled_stages`.
-  const tiebreakStageEnabled = enabledStages.includes('llm_tiebreak') && llmTiebreakBand !== 'NONE';
+  const tiebreakStageEnabled = !opts.skipAi && enabledStages.includes('llm_tiebreak') && llmTiebreakBand !== 'NONE';
   const tiebreakMatches = tiebreakStageEnabled
     ? engineOut.matches.filter((m) => {
         if (m.explanation.deterministic_hit) return false;
@@ -473,8 +478,8 @@ export async function runMatchingCycle(opts: RunOptions): Promise<CycleResult> {
     }
   }
 
-  // Pass 2 — GPT-5.4 only for UNKNOWN / ambiguous patterns
-  if (aiFallbackJobs.length > 0) {
+  // Pass 2 — GPT-5.4 only for UNKNOWN / ambiguous patterns (skipped when skipAi=true)
+  if (!opts.skipAi && aiFallbackJobs.length > 0) {
     logger.info({ count: aiFallbackJobs.length }, 'auto-triage: GPT-5.4 fallback for ambiguous exceptions');
     await mapLimit(aiFallbackJobs, 3, async (row) => {
       const triage = row._pending_triage!;

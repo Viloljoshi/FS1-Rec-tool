@@ -1,10 +1,9 @@
-import { NextResponse, after } from 'next/server';
+import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { friendlyZodError } from '@/lib/api/errors';
 import { supabaseService } from '@/lib/supabase/service';
 import { getCurrentUser } from '@/lib/rbac/server';
 import { runMatchingCycle } from '@/lib/matching/run-cycle';
-import { logger } from '@/lib/logger/pino';
 
 const BodySchema = z.object({
   feed_a_id: z.string().uuid(),
@@ -80,60 +79,25 @@ export async function POST(request: Request) {
     }
   }
 
-  // Pre-create the cycle row so we can return cycle_id immediately,
-  // then run the full matching pipeline (AI tiebreak + triage) in the
-  // background via after() — avoids Netlify's 10s function timeout.
-  const { data: preCycle, error: preErr } = await service
-    .from('matching_cycles')
-    .insert({
-      feed_a_id: feedA.id,
-      feed_a_version: feedA.version,
-      feed_b_id: feedB.id,
-      feed_b_version: feedB.version,
-      date_from: parsed.data.date_from,
-      date_to: parsed.data.date_to,
-      status: 'PENDING',
-      initiated_by: user.id
-    })
-    .select('id')
-    .single();
-
-  if (preErr || !preCycle) {
-    return NextResponse.json({ error: preErr?.message ?? 'failed to create cycle' }, { status: 500 });
+  try {
+    // skipAi=true skips LLM tiebreak + AI explain so the cycle completes
+    // well within Netlify's 26s function limit. Field scores + templated
+    // triage still run — analysts see full Fellegi-Sunter decomposition.
+    const result = await runMatchingCycle({
+      supabase: service,
+      feedAId: feedA.id,
+      feedAVersion: feedA.version,
+      feedBId: feedB.id,
+      feedBVersion: feedB.version,
+      dateFrom: parsed.data.date_from,
+      dateTo: parsed.data.date_to,
+      initiatedBy: user.id,
+      restrictByCounterpartyEntity: parsed.data.restrict_by_counterparty_entity ?? true,
+      pipelineId: parsed.data.pipeline_id,
+      skipAi: true
+    });
+    return NextResponse.json(result);
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 500 });
   }
-
-  const cycleId = preCycle.id;
-  const opts = {
-    supabase: service,
-    feedAId: feedA.id,
-    feedAVersion: feedA.version,
-    feedBId: feedB.id,
-    feedBVersion: feedB.version,
-    dateFrom: parsed.data.date_from,
-    dateTo: parsed.data.date_to,
-    initiatedBy: user.id,
-    restrictByCounterpartyEntity: parsed.data.restrict_by_counterparty_entity ?? true,
-    pipelineId: parsed.data.pipeline_id,
-    existingCycleId: cycleId
-  };
-
-  // Run matching after the response is sent — keeps the HTTP call fast
-  after(async () => {
-    try {
-      await runMatchingCycle(opts);
-    } catch (err) {
-      logger.error({ err, cycleId }, 'background matching cycle failed');
-      await service
-        .from('matching_cycles')
-        .update({ status: 'FAILED', finished_at: new Date().toISOString() })
-        .eq('id', cycleId);
-    }
-  });
-
-  return NextResponse.json({
-    cycle_id: cycleId,
-    status: 'running',
-    match_count: 0,
-    exception_count: 0
-  });
 }
