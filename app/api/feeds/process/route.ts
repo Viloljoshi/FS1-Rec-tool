@@ -27,6 +27,8 @@ const ProcessSchema = z.object({
   kind: z.enum(['BROKER', 'CUSTODIAN', 'INTERNAL', 'OTHER']),
   notes: z.string().max(500).optional(),
   pipeline_id: z.string().uuid().optional(),
+  // When false, skip the automatic matching cycle (reconcile flow handles it separately)
+  run_cycle: z.boolean().optional().default(true),
   mappings: z.array(
     z.object({
       source_field: z.string(),
@@ -378,6 +380,20 @@ export async function POST(request: Request) {
   });
 
   // 8. Trigger matching cycle against Internal Blotter — but only if at
+  if (!parsed.data.run_cycle) {
+    return NextResponse.json({
+      feed_id: feedId,
+      version,
+      mapping_count: mappingRows.length,
+      rows_ingested: canonicalInserts.length,
+      rows_skipped: skipped,
+      skip_reasons: skipReasons,
+      cycle_id: null
+    });
+  }
+
+  // (run_cycle === true below — onboarding path)
+  // Trigger matching cycle against Internal Blotter — but only if at
   //    least one row survived canonicalization. Running an empty cycle
   //    silently produces a 0-match, 0-exception result which the UI shows
   //    as "no open exceptions" — indistinguishable from a healthy run.
