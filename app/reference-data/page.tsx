@@ -1,14 +1,29 @@
 import { AppShell } from '@/components/layout/AppShell';
 import { ReferenceDataClient } from './ReferenceDataClient';
+import { searchCounterparties } from '@/lib/kg/queries';
 import { supabaseService } from '@/lib/supabase/service';
 
 export default async function ReferenceDataPage() {
-  const sb = supabaseService();
-  const { data } = await sb
-    .from('counterparty_entities')
-    .select('id, canonical_name, lei, sec_crd, country')
-    .order('canonical_name', { ascending: true })
-    .limit(12);
+  let initial: Array<{
+    id: string;
+    canonical_name: string;
+    lei: string | null;
+    sec_crd: string | null;
+    country: string | null;
+  }> = [];
+
+  try {
+    initial = await searchCounterparties('', 12);
+  } catch {
+    // Neo4j unavailable — fall back to Postgres
+    const sb = supabaseService();
+    const { data } = await sb
+      .from('counterparty_entities')
+      .select('id, canonical_name, lei, sec_crd, country')
+      .order('canonical_name', { ascending: true })
+      .limit(12);
+    initial = data ?? [];
+  }
 
   return (
     <AppShell>
@@ -20,7 +35,7 @@ export default async function ReferenceDataPage() {
             cross-references are first-class queries. The matching engine calls this graph at scoring time.
           </p>
         </div>
-        <ReferenceDataClient initial={data ?? []} />
+        <ReferenceDataClient initial={initial} />
       </div>
     </AppShell>
   );
