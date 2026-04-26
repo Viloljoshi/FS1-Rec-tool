@@ -8,5 +8,8 @@
   NEXT_TELEMETRY_DISABLED = "1"
   SECRETS_SCAN_OMIT_PATHS = ".env.local.example,.env.local,.env"
 
+[functions."___netlify-server-handler"]
+  timeout = 30
+
 [[plugins]]
   package = "@netlify/plugin-nextjs"
