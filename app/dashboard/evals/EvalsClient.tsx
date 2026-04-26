@@ -66,7 +66,7 @@ export function EvalsClient({ initialRuns }: { initialRuns: EvalRun[] }) {
         const data = await res.json();
         const list: EvalRun[] = data.runs ?? [];
         setRuns(list);
-        if (list.length > 0) setSelected(list[0]);
+        if (list.length > 0) setSelected(list[0] ?? null);
       }
     } finally {
       setRunning(false);
