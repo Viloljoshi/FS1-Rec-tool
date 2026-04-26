@@ -4,7 +4,6 @@ import { friendlyZodError } from '@/lib/api/errors';
 import { supabaseServer } from '@/lib/supabase/server';
 import { supabaseService } from '@/lib/supabase/service';
 import { getCurrentUser } from '@/lib/rbac/server';
-import { recordAudit } from '@/lib/audit/log';
 import { CANONICAL_FIELDS, type CanonicalField, missingRequiredFields } from '@/lib/canonical/schema';
 import { SanitizedRowSchema } from '@/lib/canonical/row-sanitizer';
 import { resolveNextFeedVersion, retirePriorFeedVersion } from '@/lib/feed/version';
@@ -228,11 +227,13 @@ export async function POST(request: Request) {
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // 9. Audit
-    await recordAudit({
+    // 9. Audit (inline — avoids pino import chain)
+    await service.from('audit_events').insert({
+      actor: user.id,
       action: 'FEED_PROFILE_PROCESS',
       entity_type: 'feed_profile',
       entity_id: feedId,
+      before: null,
       after: {
         name: parsed.data.name,
         version,
