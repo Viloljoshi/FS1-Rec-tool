@@ -1,4 +1,4 @@
-import { NextResponse, after } from 'next/server';
+import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { friendlyZodError } from '@/lib/api/errors';
 import { supabaseServer } from '@/lib/supabase/server';
@@ -8,7 +8,6 @@ import { recordAudit } from '@/lib/audit/log';
 import { CANONICAL_FIELDS, type CanonicalField, missingRequiredFields } from '@/lib/canonical/schema';
 import { SanitizedRowSchema } from '@/lib/canonical/row-sanitizer';
 import { runMatchingCycle } from '@/lib/matching/run-cycle';
-import { embedBatch } from '@/lib/ai/openai';
 import { logger } from '@/lib/logger/pino';
 import { resolveCounterparty } from '@/lib/kg/queries';
 import { resolveNextFeedVersion, retirePriorFeedVersion } from '@/lib/feed/version';
@@ -342,32 +341,6 @@ export async function POST(request: Request) {
   for (let i = 0; i < canonicalInserts.length; i += 200) {
     const { error } = await service.from('trades_canonical').insert(canonicalInserts.slice(i, i + 200));
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  // 6b. Embed counterparty strings after response — OpenAI latency shouldn't
-  // block the HTTP reply. Embeddings update trades_canonical in the background.
-  const uniqueCpys = Array.from(
-    new Set(canonicalInserts.map((r) => String(r.counterparty ?? '')).filter(Boolean))
-  );
-  if (uniqueCpys.length > 0) {
-    after(async () => {
-      try {
-        const vecs = await embedBatch(uniqueCpys, user.id);
-        for (let idx = 0; idx < uniqueCpys.length; idx++) {
-          const name = uniqueCpys[idx]!;
-          const vec = vecs[idx];
-          if (!vec || vec.length === 0) continue;
-          await service
-            .from('trades_canonical')
-            .update({ counterparty_embedding: `[${vec.join(',')}]` })
-            .eq('source_id', feedId)
-            .eq('source_version', version)
-            .eq('counterparty', name);
-        }
-      } catch (err) {
-        logger.error({ err }, 'feeds/process: background embedding failed');
-      }
-    });
   }
 
   // 7. Audit
