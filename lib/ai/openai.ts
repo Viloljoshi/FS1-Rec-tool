@@ -159,7 +159,7 @@ export async function textCall(opts: TextCallOptions): Promise<string> {
   try {
     const response = await getOpenAI().chat.completions.create({
       model: MODEL,
-      max_tokens: opts.max_tokens ?? 2048,
+      max_completion_tokens: opts.max_tokens ?? 2048,
       messages: [
         { role: 'system', content: opts.system },
         { role: 'user', content: opts.user }

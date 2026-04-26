@@ -307,7 +307,7 @@ export function WorkspaceClient({ initialExceptions, cycles, feeds, statusFilter
       className="h-full min-w-0"
     >
       {/* Queue pane */}
-      <Panel defaultSize={24} minSize={16} maxSize={40} className="bg-white flex flex-col border-r border-slate-200">
+      <Panel defaultSize={30} minSize={22} maxSize={42} className="bg-white flex flex-col border-r border-slate-200">
         <div className="p-3 space-y-2 border-b border-slate-200">
           {activeAiFilters && aiQuery && (
             <div className="rounded border border-violet-200 bg-violet-50/40 px-2 py-1.5 flex items-start gap-1.5">
