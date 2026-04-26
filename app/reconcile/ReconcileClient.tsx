@@ -205,13 +205,12 @@ async function ensureFeedId(side: SidePayload, label: string): Promise<string | 
     toast.error(`${label}: complete the upload before running`);
     return null;
   }
-  const res = await fetch('/api/feeds/process', {
+  const res = await fetch('/api/reconcile/ingest', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       name: side.uploadName,
       kind: side.uploadFeedKind ?? 'BROKER',
-      run_cycle: false,
       mappings: side.mappings
         .filter((m) => m.canonical_field !== null)
         .map((m) => ({
